@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <link href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      background-color: #008080; font-family: 'Noto Sans JP', sans-serif;
+      margin: 0; padding: 10px; height: 100vh; box-sizing: border-box; overflow: hidden; color: #333;
+    }
+    .device-shell {
+      background-color: #E8E8E8; border: 6px solid #222; border-radius: 15px;
+      box-shadow: inset -4px -4px 0px rgba(0,0,0,0.2), 4px 4px 0px rgba(0,0,0,0.4);
+      padding: 15px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column;
+    }
+    h1 {
+      font-family: 'DotGothic16', sans-serif; text-align: center; margin: 0 0 10px 0;
+      font-size: 28px; color: #222; text-shadow: 2px 2px 0px #A9A9A9; flex-shrink: 0;
+    }
+    .screen {
+      background-color: #FFF; border: 4px solid #222; border-radius: 10px;
+      flex-grow: 1; padding: 15px; display: flex; flex-direction: column;
+      overflow: hidden; box-shadow: inset 2px 2px 5px rgba(0,0,0,0.1); position: relative;
+    }
+    .section { margin-bottom: 12px; flex-shrink: 0; }
+    .section-title {
+      font-family: 'DotGothic16', sans-serif; background-color: #222; color: #FFF;
+      display: inline-block; padding: 2px 10px; margin-bottom: 8px; border-radius: 5px;
+    }
+    .flex-section { flex-grow: 1; display: flex; flex-direction: column; min-height: 0; margin-bottom: 0; }
+    .clinic-list {
+      display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;
+      background: #f9f9f9; border: 2px solid #ddd; padding: 10px; border-radius: 5px;
+      overflow-y: auto; flex-grow: 1;
+    }
+    select, input[type="number"] {
+      font-family: 'Noto Sans JP', sans-serif; font-size: 16px; padding: 5px;
+      border: 2px solid #222; border-radius: 5px; background: #f4f4f4;
+    }
+    .radio-group { display: flex; gap: 10px; }
+    .radio-label {
+      background: #D3D3D3; border: 2px solid #222; border-radius: 20px;
+      padding: 5px 15px; cursor: pointer; font-weight: bold; transition: background 0.2s;
+    }
+    .radio-group input[type="radio"] { display: none; }
+    .radio-group input[type="radio"]:checked + .radio-label { background: #9BBC0F; color: #222; }
+    .clinic-list label { display: flex; align-items: center; cursor: pointer; font-size: 14px; }
+    .clinic-list label.disabled-label { color: #999; cursor: not-allowed; }
+    .clinic-list input[type="checkbox"] { margin-right: 8px; transform: scale(1.2); }
+    
+    .controls { display: flex; justify-content: space-between; margin-top: 15px; align-items: center; flex-shrink: 0; }
+    .btn {
+      font-family: 'DotGothic16', sans-serif; font-size: 18px; border: 4px solid #222;
+      border-radius: 25px; padding: 10px 20px; cursor: pointer; font-weight: bold;
+      box-shadow: 2px 2px 0px #222; transition: transform 0.1s; display: inline-block;
+    }
+    .btn:active { transform: translate(2px, 2px); box-shadow: none; }
+    .btn-start { background-color: #E60012; color: #FFF; }
+    .btn-all { background-color: #FFCC00; color: #222; }
+
+    /* オーバーレイ（プログレス＆完了画面） */
+    #overlay {
+      display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(34,34,34,0.95); z-index: 10; color: #FFF;
+      flex-direction: column; justify-content: center; align-items: center; text-align: center;
+    }
+    #progress-area, #completion-area { width: 100%; display: none; }
+    
+    .progress-box { width: 80%; border: 4px solid #FFF; height: 30px; margin: 20px auto; border-radius: 15px; overflow: hidden; background: #333; }
+    .progress-fill { width: 0%; height: 100%; background: #9BBC0F; transition: width 0.5s ease; }
+    .progress-text { font-family: 'DotGothic16', sans-serif; font-size: 32px; color: #9BBC0F; margin-bottom: 10px; }
+    .progress-desc { font-size: 14px; margin-bottom: 20px; white-space: pre-wrap; }
+
+    .btn-stop { background-color: #555; color: #FFF; border: 3px solid #FFF; border-radius: 10px; padding: 5px 20px; font-family: 'DotGothic16', sans-serif; font-size: 16px; cursor: pointer; margin: 5px; }
+    .btn-bg { background-color: #4a86e8; color: #FFF; border: 3px solid #FFF; border-radius: 10px; padding: 5px 20px; font-family: 'DotGothic16', sans-serif; font-size: 16px; cursor: pointer; margin: 5px; }
+
+    .completion-title { font-family: 'DotGothic16', sans-serif; font-size: 36px; margin-bottom: 20px; }
+    .title-success { color: #9BBC0F; }
+    .title-stopped { color: #FF6347; }
+    .link-btn { background-color: #FFF; color: #222; font-size: 16px; margin: 10px; border-radius: 10px; width: 80%; }
+    .close-btn { background-color: #222; color: #FFF; border-color: #FFF; margin-top: 20px; }
+  </style>
+</head>
+<body>
+
+  <div class="device-shell">
+    <h1>担当くん GENERATOR</h1>
+
+    <div class="screen">
+      <div id="main-ui">
+        <div class="section">
+          <div class="section-title">1. 対象月</div>
+          <div>
+            <input type="number" id="targetYear" style="width: 80px;"> 年 
+            <input type="number" id="targetMonth" min="1" max="12" style="width: 60px;"> 月
+          </div>
+        </div>
+        <div class="section">
+          <div class="section-title">2. エリア</div>
+          <div class="radio-group" id="areaContainer"></div>
+        </div>
+        <div class="section">
+          <div class="section-title">3. グループ</div>
+          <select id="groupSelect" style="width: 100%; max-width: 300px;"><option>エリアを選択</option></select>
+        </div>
+        <div class="section flex-section">
+          <div class="section-title">4. 出力する拠点</div>
+          <div style="margin-bottom:5px; flex-shrink: 0;">
+            <button onclick="toggleAllCheckboxes(true)">すべて選択</button> <button onclick="toggleAllCheckboxes(false)">選択解除</button>
+          </div>
+          <div class="clinic-list" id="clinicContainer"></div>
+        </div>
+      </div>
+
+      <div id="overlay">
+        <div id="progress-area">
+          <div class="progress-text" id="pct-text">0%</div>
+          <div class="progress-box"><div class="progress-fill" id="p-bar"></div></div>
+          <div class="progress-desc" id="status-text">準備中...</div>
+          <div>
+            <button class="btn-bg" onclick="google.script.host.close()">閉じてバックグラウンドで続行</button><br>
+            <button class="btn-stop" id="btn-stop" onclick="requestStop()">STOP (処理を中断)</button>
+          </div>
+        </div>
+        
+        <div id="completion-area">
+          <div class="completion-title" id="comp-title">SUCCESS!!</div>
+          <p id="comp-desc">すべての処理が完了しました。</p>
+          <a id="btn-folder" href="#" target="_blank" class="btn link-btn">📁 保存先フォルダを開く</a><br>
+          <a id="btn-index" href="#" target="_blank" class="btn link-btn">✨ 目次シートを開く</a><br>
+          <button class="btn close-btn" onclick="google.script.host.close()">閉じる</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn btn-all" onclick="startProcess('ALL')">全拠点 一括出力</button>
+      <button class="btn btn-start" onclick="startProcess('SELECTED')">START (選択を出力)</button>
+    </div>
+  </div>
+
+  <script>
+    var globalHierarchy = {};
+    var pollingTimer = null;
+
+    window.onload = function() {
+      google.script.run.withSuccessHandler(initializeUI).getUIData();
+      document.getElementById('targetYear').addEventListener('change', updateClinics);
+      document.getElementById('targetMonth').addEventListener('change', updateClinics);
+    };
+
+    function initializeUI(data) {
+      globalHierarchy = data.hierarchy;
+      document.getElementById('targetYear').value = data.defaultYear;
+      document.getElementById('targetMonth').value = data.defaultMonth;
+
+      var areaContainer = document.getElementById('areaContainer');
+      areaContainer.innerHTML = '';
+      Object.keys(globalHierarchy).forEach(function(area, index) {
+        var checked = index === 0 ? 'checked' : '';
+        areaContainer.innerHTML += `<input type="radio" name="area" id="area_${index}" value="${area}" onchange="updateGroups()" ${checked}><label for="area_${index}" class="radio-label">${area}</label>`;
+      });
+      updateGroups(); 
+    }
+
+    function updateGroups() {
+      var selectedArea = document.querySelector('input[name="area"]:checked').value;
+      var groupSelect = document.getElementById('groupSelect');
+      groupSelect.innerHTML = '';
+      Object.keys(globalHierarchy[selectedArea]).forEach(function(group) {
+        groupSelect.innerHTML += `<option value="${group}">${group}</option>`;
+      });
+      groupSelect.onchange = updateClinics;
+      updateClinics(); 
+    }
+
+    function updateClinics() {
+      var selectedArea = document.querySelector('input[name="area"]:checked').value;
+      var selectedGroup = document.getElementById('groupSelect').value;
+      var ty = parseInt(document.getElementById('targetYear').value, 10);
+      var tm = parseInt(document.getElementById('targetMonth').value, 10);
+      var targetVal = ty * 12 + tm;
+
+      var container = document.getElementById('clinicContainer');
+      container.innerHTML = '';
+      
+      (globalHierarchy[selectedArea][selectedGroup] || []).forEach(function(c) {
+        var disabled = false;
+        var suffix = '';
+        var labelClass = '';
+        
+        if (c.open) {
+          var openVal = c.open.y * 12 + c.open.m;
+          if (targetVal < openVal) {
+            disabled = true;
+            suffix = ' <span style="color:#E60012; font-weight:bold; font-size:12px;">(未開院)</span>';
+            labelClass = 'disabled-label';
+          }
+        }
+        
+        var chk = disabled ? '' : 'checked';
+        var disAttr = disabled ? 'disabled' : '';
+        container.innerHTML += `<label class="${labelClass}"><input type="checkbox" name="clinicCheck" value="${c.clinicNo}" ${chk} ${disAttr}>${c.name}${suffix}</label>`;
+      });
+    }
+
+    function toggleAllCheckboxes(check) {
+      document.querySelectorAll('input[name="clinicCheck"]:not(:disabled)').forEach(function(cb) { cb.checked = check; });
+    }
+
+    function startProcess(type) {
+      var tYear = document.getElementById('targetYear').value;
+      var tMonth = document.getElementById('targetMonth').value;
+      var payload = { targetYear: tYear, targetMonth: tMonth, clinicNos: [] };
+      
+      if (type === 'ALL') {
+        payload.clinicNos = ['ALL'];
+      } else {
+        var checkboxes = document.querySelectorAll('input[name="clinicCheck"]:checked');
+        if (checkboxes.length === 0) return;
+        checkboxes.forEach(function(cb) { payload.clinicNos.push(cb.value); });
+      }
+      
+      document.getElementById('main-ui').style.display = 'none';
+      document.getElementById('overlay').style.display = 'flex';
+      document.getElementById('progress-area').style.display = 'block';
+      document.getElementById('completion-area').style.display = 'none';
+      
+      // アラートなしで即スタート
+      google.script.run
+        .withSuccessHandler(function() {
+          pollingTimer = setInterval(pollProgress, 2000); // 2秒ごとに進捗チェック
+        })
+        .setupBackgroundProcess(payload);
+    }
+
+    function pollProgress() {
+      google.script.run
+        .withSuccessHandler(function(data) {
+          if (!data) return;
+          var total = data.total || 1;
+          var pct = Math.floor((data.processed / total) * 100);
+          
+          document.getElementById('pct-text').innerText = pct + '%';
+          document.getElementById('p-bar').style.width = pct + '%';
+          
+          if (data.isCompleted) {
+            clearInterval(pollingTimer);
+            if (data.completionData) {
+              showCompletionScreen(JSON.parse(data.completionData), false);
+            } else {
+              showCompletionScreen(null, true); // 中断された場合
+            }
+          } else {
+            var curr = (data.processed + 1 > total) ? total : data.processed + 1;
+            document.getElementById('status-text').innerText = curr + " / " + total + " 件目を生成中...\n(" + data.currentName + ")";
+          }
+        })
+        .getProgress();
+    }
+
+    function requestStop() {
+      document.getElementById('btn-stop').innerText = "停止処理中...";
+      document.getElementById('btn-stop').style.backgroundColor = "#E60012";
+      document.getElementById('status-text').innerText = "現在の拠点が終わり次第、停止します...";
+      google.script.run.stopBackgroundProcess();
+    }
+
+    function showCompletionScreen(urls, wasStopped) {
+      document.getElementById('progress-area').style.display = 'none';
+      document.getElementById('completion-area').style.display = 'block';
+      
+      var titleEl = document.getElementById('comp-title');
+      var descEl = document.getElementById('comp-desc');
+      
+      if (wasStopped) {
+        titleEl.innerText = "STOPPED";
+        titleEl.className = "completion-title title-stopped";
+        descEl.innerText = "処理が中断されました。";
+        document.getElementById('btn-folder').style.display = 'none';
+        document.getElementById('btn-index').style.display = 'none';
+      } else {
+        titleEl.innerText = "SUCCESS!!";
+        titleEl.className = "completion-title title-success";
+        descEl.innerText = "すべての処理が完了しました。";
+        if(urls) {
+          document.getElementById('btn-index').href = urls.indexUrl;
+          document.getElementById('btn-index').style.display = 'inline-block';
+          if (urls.folderUrl) {
+            document.getElementById('btn-folder').href = urls.folderUrl;
+            document.getElementById('btn-folder').style.display = 'inline-block';
+          } else {
+            document.getElementById('btn-folder').style.display = 'none';
+          }
+        }
+      }
+    }
+  </script>
+</body>
+</html>
