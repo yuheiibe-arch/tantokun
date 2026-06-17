@@ -160,7 +160,8 @@ function writeSlot(sheet, topRow, bottomRow, col, doctors, doctorMaster, useLabe
 
     var works = displayDoctors.map(function(doc) {
       if (doc.ikiNo === 'DUMMY') return ' ';
-      return doctorMaster[doc.ikiNo] || '';
+      // ★ フィルター関数を通す
+      return getValidWorkName(doctorMaster[doc.ikiNo]);
     }).join(' / ');
     bottomCell.setValue(works).setFontSize(FONT_SIZE_WORK);
     
@@ -204,7 +205,8 @@ function writeSlot(sheet, topRow, bottomRow, col, doctors, doctorMaster, useLabe
 
       workText = lines.map(function(doc) {
         if (doc.ikiNo === 'DUMMY') return ' ';
-        return doctorMaster[doc.ikiNo] || '';
+        // ★ フィルター関数を通す
+        return getValidWorkName(doctorMaster[doc.ikiNo]);
       }).join(' / ');
       
     } else {
@@ -231,7 +233,8 @@ function writeSlot(sheet, topRow, bottomRow, col, doctors, doctorMaster, useLabe
             fullText += label;
             segments.push({ start: labelStart, end: fullText.length, size: FONT_SIZE_LABEL });
           }
-          currentWorkLine.push(doc.ikiNo === 'DUMMY' ? ' ' : (doctorMaster[doc.ikiNo] || ''));
+          // ★ フィルター関数を通す
+          currentWorkLine.push(doc.ikiNo === 'DUMMY' ? ' ' : getValidWorkName(doctorMaster[doc.ikiNo]));
         });
         workLines.push(currentWorkLine.join(' / '));
       });
@@ -279,4 +282,20 @@ function drawBlockBorders(sheet, startRow, setCount) {
     sheet.getRange(top, 2, 1, 2).setBorder(null, null, true, null, null, null,
       'black', SpreadsheetApp.BorderStyle.DOTTED);
   }
+}
+
+/**
+ * ★所属先（勤務先）の表記をチェックし、ネガティブなものや空欄を統一する
+ */
+function getValidWorkName(workName) {
+  if (!workName) return 'キャップスクリニック';
+  
+  var w = String(workName).trim();
+  var negativeWords = ['フリーランス', '休職', '休職中', 'なし'];
+  
+  if (w === '' || negativeWords.indexOf(w) !== -1) {
+    return 'キャップスクリニック';
+  }
+  
+  return w;
 }

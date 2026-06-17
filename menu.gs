@@ -1,6 +1,6 @@
 /**
  * ========================================
- * 第5段階：巨大UI起動 ＆ バックグラウンド実行コントローラー（爆速化版）
+ * 第5段階：巨大UI起動 ＆ バックグラウンド実行コントローラー（UIスキップ・履歴リンク・目次統一版）
  * ========================================
  */
 
@@ -85,9 +85,6 @@ function getProgress() {
   };
 }
 
-/**
- * ★爆速化：ループの中で毎回データを読み込むのをやめました
- */
 function processBatch() {
   var startTime = Date.now();
   var props = PropertiesService.getDocumentProperties();
@@ -107,9 +104,6 @@ function processBatch() {
   clearTriggers();
   var totalCount = parseInt(props.getProperty('TOTAL_COUNT'), 10);
   
-  // ========================================================
-  // ★ここで1回だけマスターデータを読み込んで使い回す（超高速化）
-  // ========================================================
   var context = null;
   try {
     context = buildContext(year, month);
@@ -119,7 +113,6 @@ function processBatch() {
   }
   
   while (queue.length > 0) {
-    // 6分制限が近づいたら次のトリガーへバトンタッチ
     if (Date.now() - startTime > 270000) {
       props.setProperty('CLINIC_QUEUE', JSON.stringify(queue));
       props.setProperty('PROCESS_RESULTS', JSON.stringify(results));
@@ -137,20 +130,53 @@ function processBatch() {
       if (!clinic) throw new Error('拠点マスターに見つかりません。');
       
       props.setProperty('CURRENT_CLINIC_NAME', clinic.name);
-      ss.toast(currentIndex + '/' + totalCount + ' 件目を生成中...\n残り ' + queue.length + ' 件', '⚙️ 実行中: ' + clinic.name, 10);
 
-      // 生成とPDF化
-      var sheet = generateScheduleWithContext(context, clinicNo, year, month);
-      var pdfFile = exportSheetToPDF(sheet, year, month, clinic.name);
+      // --- ★ UI実行時も変更チェック（ハッシュ比較）を行う ---
+      var lastDay = new Date(year, month, 0).getDate();
+      var startKey = dateKey(new Date(year, month - 1, 1));
+      var endKey   = dateKey(new Date(year, month - 1, lastDay));
+      var currentSchedule = collectScheduleFromContext(context, clinicNo, startKey, endKey);
+      var currentHash = computeMD5_(JSON.stringify(currentSchedule));
       
-      var folders = pdfFile.getParents();
-      var folderUrl = folders.hasNext() ? folders.next().getUrl() : '';
+      var propKey = 'DAEMON_HASH_' + year + '_' + month + '_' + clinicNo;
+      var lastHash = props.getProperty(propKey);
+      
+      var expectedSheetName = ('0' + month).slice(-2) + clinic.name;
+      var targetSheet = ss.getSheetByName(expectedSheetName);
 
-      results.push({
-        success: true, clinicNo: clinicNo, clinicName: clinic.name,
-        area: clinic.area || 'その他', sheetName: sheet.getName(),
-        sheetId: sheet.getSheetId(), folderUrl: folderUrl
-      });
+      // 変更がなく、かつシートがすでに存在する場合はスキップ
+      if (currentHash === lastHash && targetSheet) {
+        ss.toast(currentIndex + '/' + totalCount + ' 件目: 変更なし・スキップ\n残り ' + queue.length + ' 件', '⏭️ スキップ: ' + clinic.name, 3);
+        
+        results.push({
+          success: true, clinicNo: clinicNo, clinicName: clinic.name,
+          area: clinic.area || 'その他', sheetName: expectedSheetName,
+          sheetId: targetSheet.getSheetId(), folderUrl: props.getProperty('LAST_FOLDER_URL') || ''
+        });
+        
+      } else {
+        // --- 変更があった場合、またはシートが存在しない場合のみ生成 ---
+        ss.toast(currentIndex + '/' + totalCount + ' 件目を生成中...\n残り ' + queue.length + ' 件', '⚙️ 実行中: ' + clinic.name, 10);
+
+        var sheet = generateScheduleWithContext(context, clinicNo, year, month);
+        sheet.showSheet(); // 原本が非表示の場合でも強制的に表示させてリンクを使えるようにする
+        
+        var pdfFile = exportSheetToPDF(sheet, year, month, clinic.name);
+        
+        var nowStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
+        props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr); // 更新日時の保存
+        props.setProperty(propKey, currentHash); // 次回比較用のハッシュを保存
+        
+        var folders = pdfFile.getParents();
+        var folderUrl = folders.hasNext() ? folders.next().getUrl() : '';
+        props.setProperty('LAST_FOLDER_URL', folderUrl);
+
+        results.push({
+          success: true, clinicNo: clinicNo, clinicName: clinic.name,
+          area: clinic.area || 'その他', sheetName: sheet.getName(),
+          sheetId: sheet.getSheetId(), folderUrl: folderUrl
+        });
+      }
     } catch (e) {
       results.push({ success: false, clinicNo: rawClinicNo, error: e.message });
     }
@@ -161,7 +187,8 @@ function processBatch() {
   }
   
   ss.toast('最終処理（目次の作成）を行っています...', '✨ 仕上げ中', 5);
-  var urls = updateIndexSheet(results, ss);
+  // 手動実行時も、全自動スキャン型の4列目次ジェネレーターを呼び出す
+  var urls = updateIndexSheet(null, ss);
   
   props.setProperty('IS_COMPLETED', 'true');
   props.setProperty('COMPLETION_DATA', JSON.stringify(urls));
@@ -204,58 +231,100 @@ function stopBackgroundProcess() {
   SpreadsheetApp.getActiveSpreadsheet().toast('バックグラウンド処理を強制停止し、キューをクリアしました。', '🛑 停止', 10);
 }
 
-function updateIndexSheet(results, ss) {
+/**
+ * ★目次生成ロジックの統一化（自動監視側と完全に同じ4列スキャン方式）
+ */
+function updateIndexSheet(unused_results, ss) {
   if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheetName = '✨ 目次';
-  var sheet = ss.getSheetByName(sheetName);
+  var indexSheet = ss.getSheetByName(sheetName);
   
-  if (!sheet) {
-    sheet = ss.insertSheet(sheetName, 0);
+  if (!indexSheet) {
+    indexSheet = ss.insertSheet(sheetName, 0);
   } else {
-    ss.setActiveSheet(sheet);
+    ss.setActiveSheet(indexSheet);
     ss.moveActiveSheet(1);
   }
   
-  sheet.clear();
+  indexSheet.clear();
 
   var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
-  sheet.getRange('A1:C1').merge();
-  sheet.getRange('A1').setValue('✨ 目次 (最終更新: ' + now + ')')
+  indexSheet.getRange('A1:D1').merge();
+  indexSheet.getRange('A1').setValue('✨ 担当くん 総合目次 (UI手動生成: ' + now + ')')
        .setBackground('#4a86e8').setFontColor('white').setFontWeight('bold').setFontSize(12);
-
-  sheet.getRange('A2:C2').setValues([['エリア', '拠点・シート名', 'リンク']])
+  indexSheet.getRange('A2:D2').setValues([['エリア', '拠点・シート名', '最終更新', 'リンク']])
        .setBackground('#cccccc').setFontWeight('bold');
 
+  var clinicMaster = getClinicMaster();
+  var props = PropertiesService.getDocumentProperties();
+  var sheets = ss.getSheets();
   var rows = [];
-  var folderUrlToReturn = '';
 
-  for (var i = 0; i < results.length; i++) {
-    var r = results[i];
-    if (!r) continue;
+  for (var i = 0; i < sheets.length; i++) {
+    var sName = sheets[i].getName();
+    var m = sName.match(/^(\d{2})(.+)$/);
+    if (!m) continue; 
     
-    if (r.folderUrl) folderUrlToReturn = r.folderUrl;
+    var clinicName = m[2];
+    var area = 'その他エリア';
     
-    if (!r.success) {
-      rows.push([r.area || '-', 'エラー (No.' + r.clinicNo + ')', r.error]);
-      continue;
+    for (var j = 0; j < clinicMaster.list.length; j++) {
+      if (clinicMaster.list[j].name === clinicName) {
+        area = clinicMaster.list[j].area || 'その他エリア';
+        break;
+      }
     }
     
-    var sheetUrl = ss.getUrl() + '#gid=' + r.sheetId;
+    var lastUpdate = props.getProperty('LAST_UPDATE_' + sName) || '-';
+    var sheetUrl = ss.getUrl() + '#gid=' + sheets[i].getSheetId();
     var formula = '=HYPERLINK("' + sheetUrl + '", "開く")';
-    rows.push([r.area, r.sheetName, formula]);
+    
+    rows.push({
+      area: area,
+      sheetName: sName,
+      lastUpdate: lastUpdate,
+      formula: formula
+    });
   }
 
-  if (rows.length > 0) {
-    sheet.getRange(3, 1, rows.length, 3).setValues(rows);
-    sheet.getRange(2, 1, rows.length + 1, 3).setBorder(true, true, true, true, true, true);
+  rows.sort(function(a, b) {
+    if (a.area !== b.area) return a.area.localeCompare(b.area);
+    return a.sheetName.localeCompare(b.sheetName);
+  });
+
+  var valueRows = [];
+  rows.forEach(function(row) {
+    valueRows.push([row.area, row.sheetName, row.lastUpdate, row.formula]);
+  });
+
+  if (valueRows.length > 0) {
+    indexSheet.getRange(3, 1, valueRows.length, 4).setValues(valueRows);
+    indexSheet.getRange(2, 1, valueRows.length + 1, 4).setBorder(true, true, true, true, true, true);
   }
 
-  sheet.setColumnWidth(1, 100);
-  sheet.setColumnWidth(2, 250);
-  sheet.setColumnWidth(3, 80);
+  indexSheet.setColumnWidth(1, 120);
+  indexSheet.setColumnWidth(2, 200);
+  indexSheet.setColumnWidth(3, 160);
+  indexSheet.setColumnWidth(4, 80);
 
   return {
-    indexUrl: ss.getUrl() + '#gid=' + sheet.getSheetId(),
-    folderUrl: folderUrlToReturn
+    indexUrl: ss.getUrl() + '#gid=' + indexSheet.getSheetId(),
+    folderUrl: props.getProperty('LAST_FOLDER_URL') || ''
   };
+}
+
+/**
+ * 手動UIからハッシュ計算を行うための共通関数
+ */
+function computeMD5_(input) {
+  var rawHash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, input, Utilities.Charset.UTF_8);
+  var hashStr = '';
+  for (var i = 0; i < rawHash.length; i++) {
+    var byteVal = rawHash[i];
+    if (byteVal < 0) byteVal += 256;
+    var byteString = byteVal.toString(16);
+    if (byteString.length == 1) byteString = "0" + byteString;
+    hashStr += byteString;
+  }
+  return hashStr;
 }

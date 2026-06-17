@@ -8,10 +8,10 @@
 /**
  * 拠点名マスターを読み込み、クリニックNo→拠点情報 の対応表を返す。
  * 返り値の例:
- *   getClinicMaster()[14] = {
- *     name: '川口', group: '埼玉', area: '関東',
- *     openDate: Date, clinicNo: 14, director: '青山舞'
- *   }
+ * getClinicMaster()[14] = {
+ * name: '川口', group: '埼玉', area: '関東',
+ * openDate: Date, clinicNo: 14, director: '青山舞'
+ * }
  * ※ MQC など正規記載が無い行はスキップ。
  */
 function getClinicMaster() {
@@ -25,6 +25,11 @@ function getClinicMaster() {
   var idxOpen    = requireColumn(h, '開院日', '拠点名');
   var idxClinicNo= requireColumn(h, 'クリニックNo', '拠点名');
   var idxDirector= optionalColumn(h, '院長氏名');
+  
+  // ★追加：Chatwork通知用のID列を取得
+  var idxLeaderId      = optionalColumn(h, '拠点長ID');
+  var idxSharedAccount = optionalColumn(h, '共用アカウント');
+  var idxChatId        = optionalColumn(h, '全体チャットID');
 
   var master = {};       // clinicNo -> info
   var listForMenu = [];  // メニュー用の並び（正規記載・グループ）
@@ -44,7 +49,11 @@ function getClinicMaster() {
       group: String(row[idxGroup]).trim(),
       area: (idxArea !== null) ? String(row[idxArea]).trim() : '',
       openDate: row[idxOpen],
-      director: (idxDirector !== null) ? String(row[idxDirector]).trim() : ''
+      director: (idxDirector !== null) ? String(row[idxDirector]).trim() : '',
+      // ★追加：メンション・通知用のデータを格納
+      leaderId: (idxLeaderId !== null) ? String(row[idxLeaderId]).trim() : '',
+      sharedAccount: (idxSharedAccount !== null) ? String(row[idxSharedAccount]).trim() : '',
+      chatId: (idxChatId !== null) ? String(row[idxChatId]).trim() : ''
     };
     master[clinicNo] = info;
     listForMenu.push(info);
