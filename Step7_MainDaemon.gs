@@ -1,163 +1,227 @@
 /**
- * 自動監視デーモン（メイン処理：深夜帯に実行）
+ * ========================================
+ * 🌟 本番用：全拠点 自動監視デーモン（完全決定版）
+ * ========================================
+ * （日付バグ修正 ＆ スパム通知防止 ＆ 欠員・追加検知 搭載）
+ * ※8月以降の本番稼働時に、毎日朝にトリガー起動させるスクリプトです。
  */
-function daemon_checkAndSyncSchedules() {
+function daemon_Main_AllClinics() {
   var today = new Date();
   var currentYear = today.getFullYear();
   var currentMonth = today.getMonth() + 1;
   var lastDayOfThisMonth = new Date(currentYear, currentMonth, 0).getDate();
   var targets = [];
 
+  // ①【今月分】の監視（日常の欠員・補充の検知用）
+  targets.push({ year: currentYear, month: currentMonth, isNewMonth: false });
+
+  // ②【来月分】の監視（月末一斉送信用：今日が月末1日前以降なら作動）
   if (today.getDate() >= lastDayOfThisMonth - 1) {
     var nextYear = currentMonth === 12 ? currentYear + 1 : currentYear;
     var nextMonth = currentMonth === 12 ? 1 : currentMonth + 1;
     targets.push({ year: nextYear, month: nextMonth, isNewMonth: true });
-  } else {
-    targets.push({ year: currentYear, month: currentMonth, isNewMonth: false });
   }
-  
+
+  Logger.log('====== 🌟 本番デーモン (全拠点監視) 起動 ======');
+
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var props = PropertiesService.getDocumentProperties();
   var needIndexUpdate = false;
-  
+
   targets.forEach(function(target) {
-    var year = target.year;
-    var month = target.month;
+    var TARGET_YEAR = target.year;
+    var TARGET_MONTH = target.month;
+    
+    Logger.log('▶ ' + TARGET_YEAR + '年' + TARGET_MONTH + '月分の処理を開始...');
+    
     var context;
-    try { context = buildContext(year, month); } catch (e) { return; }
+    try { 
+      context = buildContext(TARGET_YEAR, TARGET_MONTH); 
+    } catch (e) { 
+      Logger.log('❌ データ読み込み失敗: ' + e.message);
+      return; 
+    }
     
     context.clinicMaster.list.forEach(function(clinic) {
-      var targetVal = year * 12 + month;
+      // ★ PoCとは違い、全拠点が対象になるため拠点長での絞り込みは行いません
+      
+      // 開院判定
+      var targetVal = TARGET_YEAR * 12 + TARGET_MONTH;
       if (clinic.openDate && Object.prototype.toString.call(clinic.openDate) === '[object Date]') {
         var openVal = clinic.openDate.getFullYear() * 12 + (clinic.openDate.getMonth() + 1);
-        if (targetVal < openVal) return; // 未開院スキップ
+        if (targetVal < openVal) return; 
       }
       
       var clinicNo = clinic.clinicNo;
-      var lastDay = new Date(year, month, 0).getDate();
-      var startKey = dateKey(new Date(year, month - 1, 1));
-      var endKey   = dateKey(new Date(year, month - 1, lastDay));
+      var lastDay = new Date(TARGET_YEAR, TARGET_MONTH, 0).getDate();
+      var startKey = dateKey(new Date(TARGET_YEAR, TARGET_MONTH - 1, 1));
+      var endKey   = dateKey(new Date(TARGET_YEAR, TARGET_MONTH - 1, lastDay));
       
       var currentSchedule = collectScheduleFromContext(context, clinicNo, startKey, endKey);
       var scheduleStr = JSON.stringify(currentSchedule);
       var currentHash = computeMD5_(scheduleStr);
-      var propKey = 'DAEMON_HASH_' + year + '_' + month + '_' + clinicNo;
-      var lastHash = props.getProperty(propKey);
-      var expectedSheetName = ('0' + month).slice(-2) + clinic.name;
-      var targetSheet = ss.getSheetByName(expectedSheetName);
-      var nowStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
-      var oldSchedule = getSavedScheduleState_(clinicNo, year, month);
       
-      if (currentHash !== lastHash || !targetSheet) {
-        Logger.log('【変更検知 🔄】' + clinic.name);
-        try {
-          var sheet = generateScheduleWithContext(context, clinicNo, year, month);
-          
-          sheet.getRange('A1').clearNote();
-          SpreadsheetApp.flush();
-          
-          var pdfFile = exportSheetToPDF(sheet, year, month, clinic.name);
-          if (!pdfFile) throw new Error('exportSheetToPDF からファイルが返却されませんでした。');
-          
-          var sheetUrl = ss.getUrl() + '#gid=' + sheet.getSheetId();
-          var isFirstTime = (!lastHash); 
-          var filledVacancies = isFirstTime ? [] : getFilledVacancies_(oldSchedule, currentSchedule);
-          
-          // ★ 送信するのではなく、朝9時送信用に「予約」する
-          if (isFirstTime && target.isNewMonth) {
-            enqueueChatworkNotification_(clinic, month, 'monthly', [], pdfFile, sheetUrl);
-          } else if (filledVacancies.length > 0) {
-            enqueueChatworkNotification_(clinic, month, 'filled', filledVacancies, pdfFile, sheetUrl);
-          }
-          
-          props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr);
+      // 本番用の記憶キー（PoCとは別枠で管理します）
+      var propKey = 'DAEMON_HASH_' + TARGET_YEAR + '_' + TARGET_MONTH + '_' + clinicNo;
+      var lastHash = props.getProperty(propKey);
+      
+      var expectedSheetName = ('0' + TARGET_MONTH).slice(-2) + clinic.name;
+      var targetSheet = ss.getSheetByName(expectedSheetName);
+      var nowStr = Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
+      
+      var oldSchedule = getSavedScheduleState_(clinicNo, TARGET_YEAR, TARGET_MONTH);
+      var isChanged = (currentHash !== lastHash || !targetSheet);
+      
+      if (isChanged) {
+        var isFirstTime = (!lastHash); 
+        var diffs = isFirstTime ? { filled: [], vacated: [] } : checkScheduleDifferences_Main_(oldSchedule, currentSchedule);
+        
+        // ★ 厳格なスパム通知防止ロジック
+        var shouldSendChat = true;
+        if (!isFirstTime && diffs.filled.length === 0 && diffs.vacated.length === 0) {
+          shouldSendChat = false; 
+        }
+
+        if (!shouldSendChat) {
+          Logger.log('⏩ ' + clinic.name + ' : 細かな変更のため通知スキップ（データは裏で最新化します）');
+          // 通知はしないが、システムが「直した状態」を記憶するように上書き更新だけ行う
           props.setProperty(propKey, currentHash);
-          saveScheduleState_(clinicNo, year, month, currentSchedule);
-          sheet.getRange('A1').setNote('🔄 最終変更検知・更新: ' + nowStr + '\n(データハッシュ: ' + currentHash + ')');
-          needIndexUpdate = true;
+          saveScheduleState_(clinicNo, TARGET_YEAR, TARGET_MONTH, currentSchedule);
+        } else {
+          Logger.log('🔥 【処理開始】' + clinic.name + ' (' + TARGET_MONTH + '月分) - チャット送信あり');
           
-        } catch (err) {
-          Logger.log('【エラー ❌】' + clinic.name + ': ' + err.message);
+          var maxRetries = 2;
+          for (var attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+              var sheet = generateScheduleWithContext(context, clinicNo, TARGET_YEAR, TARGET_MONTH);
+              SpreadsheetApp.flush();
+              Utilities.sleep(2000); 
+              
+              sheet.getRange('A1').clearNote();
+              SpreadsheetApp.flush();
+              
+              var pdfFile = exportSheetToPDF(sheet, TARGET_YEAR, TARGET_MONTH, clinic.name);
+              if (!pdfFile) throw new Error('PDF生成失敗');
+              
+              var pdfBlob = pdfFile.getBlob();
+              var sheetUrl = ss.getUrl() + '#gid=' + sheet.getSheetId();
+              var type = isFirstTime ? 'monthly' : 'filled';
+              
+              var finalRoomId = clinic.chatId; // 本番は必ず本番ルームへ送信
+              if (finalRoomId) {
+                Logger.log('📥 Chatwork送信中... (宛先: ' + finalRoomId + ')');
+                main_sendChatworkDirectly_(clinic, TARGET_MONTH, type, diffs, pdfBlob, sheetUrl, finalRoomId);
+              }
+              
+              props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr);
+              props.setProperty(propKey, currentHash);
+              saveScheduleState_(clinicNo, TARGET_YEAR, TARGET_MONTH, currentSchedule);
+              sheet.getRange('A1').setNote('🔄 自動更新: ' + nowStr + '\n(ハッシュ: ' + currentHash + ')');
+              needIndexUpdate = true;
+              
+              break; 
+            } catch (err) {
+              if (attempt < maxRetries) {
+                Logger.log('⚠️ 【リトライ】エラー再試行... (' + err.message + ')');
+                Utilities.sleep(2000);
+              } else {
+                Logger.log('❌ 【エラー】' + clinic.name + ': ' + err.message);
+              }
+            }
+          }
         }
         Utilities.sleep(1500); 
+      } else {
+        Logger.log('✅ ' + clinic.name + ' は変更なし (スキップ)');
       }
     });
   });
+  
   if (needIndexUpdate) rebuildIndexSheet_standalone(ss);
+  Logger.log('====== 🌟 本番デーモン 終了 ======');
 }
 
 /**
- * 自動監視用の目次再構築関数
+ * 【本番用】差分検知関数（「0月」日付バグ修正済み）
  */
-function rebuildIndexSheet_standalone(ss) {
-  var sheetName = '✨ 目次';
-  var indexSheet = ss.getSheetByName(sheetName);
+function checkScheduleDifferences_Main_(oldSched, newSched) {
+  var diff = { filled: [], vacated: [] };
+  if (!oldSched) return diff;
   
-  if (!indexSheet) {
-    indexSheet = ss.insertSheet(sheetName, 0);
-  } else {
-    ss.setActiveSheet(indexSheet);
-    ss.moveActiveSheet(1);
-  }
-  
-  indexSheet.clear();
-
-  var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
-  indexSheet.getRange('A1:D1').merge();
-  indexSheet.getRange('A1').setValue('✨ 担当くん 総合目次 (自動監視更新: ' + now + ')')
-       .setBackground('#4a86e8').setFontColor('white').setFontWeight('bold').setFontSize(12);
-  indexSheet.getRange('A2:D2').setValues([['エリア', '拠点・シート名', '最終更新', 'リンク']])
-       .setBackground('#cccccc').setFontWeight('bold');
-
-  var clinicMaster = getClinicMaster();
-  var props = PropertiesService.getDocumentProperties();
-  var sheets = ss.getSheets();
-  var rows = [];
-
-  for (var i = 0; i < sheets.length; i++) {
-    var sName = sheets[i].getName();
-    var m = sName.match(/^(\d{2})(.+)$/);
-    if (!m) continue; 
+  Object.keys(newSched).forEach(function(dKey) {
+    // ハイフンを除去して安全に月日を抽出
+    var cleanKey = dKey.replace(/-/g, ''); 
+    var dateStr = parseInt(cleanKey.substring(4, 6), 10) + "月" + parseInt(cleanKey.substring(6, 8), 10) + "日";
     
-    var clinicName = m[2];
-    var area = 'その他エリア';
-    
-    for (var j = 0; j < clinicMaster.list.length; j++) {
-      if (clinicMaster.list[j].name === clinicName) {
-        area = clinicMaster.list[j].area || 'その他エリア';
-        break;
+    ['am', 'pm'].forEach(function(slot) {
+      var oldDocs = (oldSched[dKey] && oldSched[dKey][slot]) ? oldSched[dKey][slot] : [];
+      var newDocs = newSched[dKey][slot] || [];
+
+      var oldHasDoc = oldDocs.some(function(d) { return d.name && d.name.replace(/\s/g, '') !== ""; });
+      var newHasDoc = newDocs.some(function(d) { return d.name && d.name.replace(/\s/g, '') !== ""; });
+
+      var slotName = (slot === 'am') ? '午前' : '午後(夜間含む)';
+
+      if (!oldHasDoc && newHasDoc) {
+        diff.filled.push(dateStr + "の" + slotName);
+      } else if (oldHasDoc && !newHasDoc) {
+        diff.vacated.push(dateStr + "の" + slotName);
       }
-    }
-    
-    var lastUpdate = props.getProperty('LAST_UPDATE_' + sName) || '新規生成';
-    var sheetUrl = ss.getUrl() + '#gid=' + sheets[i].getSheetId();
-    var formula = '=HYPERLINK("' + sheetUrl + '", "開く")';
-    
-    rows.push({
-      area: area,
-      sheetName: sName,
-      lastUpdate: lastUpdate,
-      formula: formula
     });
+  });
+  return diff;
+}
+
+/**
+ * 【本番用】Chatwork直接送信関数
+ */
+function main_sendChatworkDirectly_(clinic, month, type, diffs, pdfBlob, sheetUrl, roomId) {
+  var token = PropertiesService.getScriptProperties().getProperty('CHATWORK_API_TOKEN');
+  if (!token) return;
+  
+  var toText = (clinic.leaderId || '') + '\n' + (clinic.sharedAccount || '') + '\n\n';
+  var message = '';
+  
+  if (type === 'monthly') {
+    message = toText + '[info][title]来月のシフト表送付[/title]\nお疲れ様です。来月' + month + '月の【' + clinic.name + '】のシフト表を共有させていただきます。\n医師不在がある箇所は、医師が調整され次第更新版をお送りいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
+  } else {
+    var diffMessage = '';
+    if (diffs.filled.length > 0) {
+      diffMessage += '【医師が確定した枠】\n・' + diffs.filled.join('\n・') + '\n\n';
+    }
+    if (diffs.vacated.length > 0) {
+      diffMessage += '【急遽不在(欠員)となった枠】\n・' + diffs.vacated.join('\n・') + '\n\n';
+    }
+
+    message = toText + '[info][title]差替シフト表送付[/title]\nお疲れ様です。\nシフトに変更がございましたので、差し替え版をお送りいたします。\n\n' + diffMessage + '適宜ご確認をお願いいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
   }
 
-  rows.sort(function(a, b) {
-    if (a.area !== b.area) return a.area.localeCompare(b.area);
-    return a.sheetName.localeCompare(b.sheetName);
-  });
+  try {
+    var boundary = "----WebKitFormBoundary" + Utilities.getUuid().replace(/-/g, '');
+    var payload = [];
+    function appendString(str) {
+      var bytes = Utilities.newBlob(str).getBytes();
+      for (var i = 0; i < bytes.length; i++) { payload.push(bytes[i]); }
+    }
+    appendString("--" + boundary + "\r\n");
+    appendString("Content-Disposition: form-data; name=\"message\"\r\n\r\n");
+    appendString(message + "\r\n");
+    appendString("--" + boundary + "\r\n");
+    appendString("Content-Disposition: form-data; name=\"file\"; filename=\"" + pdfBlob.getName() + "\"\r\n");
+    appendString("Content-Type: " + pdfBlob.getContentType() + "\r\n\r\n");
+    var fileBytes = pdfBlob.getBytes();
+    for (var j = 0; j < fileBytes.length; j++) { payload.push(fileBytes[j]); }
+    appendString("\r\n--" + boundary + "--\r\n");
 
-  var valueRows = [];
-  rows.forEach(function(row) {
-    valueRows.push([row.area, row.sheetName, row.lastUpdate, row.formula]);
-  });
-
-  if (valueRows.length > 0) {
-    indexSheet.getRange(3, 1, valueRows.length, 4).setValues(valueRows);
-    indexSheet.getRange(2, 1, valueRows.length + 1, 4).setBorder(true, true, true, true, true, true);
+    var url = 'https://api.chatwork.com/v2/rooms/' + roomId + '/files';
+    var options = {
+      "method": "post",
+      "headers": { "X-ChatWorkToken": token, "Content-Type": "multipart/form-data; boundary=" + boundary },
+      "payload": payload,
+      "muteHttpExceptions": true
+    };
+    UrlFetchApp.fetch(url, options);
+  } catch(e) {
+    Logger.log('❌ Chatwork送信エラー: ' + e.message);
   }
-
-  indexSheet.setColumnWidth(1, 120);
-  indexSheet.setColumnWidth(2, 200);
-  indexSheet.setColumnWidth(3, 160);
-  indexSheet.setColumnWidth(4, 80);
 }
