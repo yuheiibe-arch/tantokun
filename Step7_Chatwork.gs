@@ -1,11 +1,14 @@
 /**
+ * ========================================
  * Chatwork連携モジュール（夜間キュー保存 ＆ 朝の一斉送信）
+ * ========================================
  */
 
 /**
  * 夜間用：すぐに送信せず「送信待合室（キュー）」にメッセージとファイルを予約する
+ * ★PoC知見 반영：欠員(vacated)と補充(filled)の両方を処理できる動的メッセージに対応
  */
-function enqueueChatworkNotification_(clinic, month, type, filledVacancies, pdfFile, sheetUrl) {
+function enqueueChatworkNotification_(clinic, month, type, diffs, pdfFile, sheetUrl) {
   var roomId = clinic.chatId; 
   if (!roomId) {
     Logger.log('【警告】' + clinic.name + ' の送信先ルームIDがないため、送信予約をスキップします。');
@@ -17,8 +20,17 @@ function enqueueChatworkNotification_(clinic, month, type, filledVacancies, pdfF
   
   if (type === 'monthly') {
     message = toText + '[info][title]来月のシフト表送付[/title]\nお疲れ様です。来月' + month + '月の【' + clinic.name + '】のシフト表を共有させていただきます。\n医師不在がある箇所は、医師が調整され次第更新版をお送りいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
-  } else if (type === 'filled') {
-    message = toText + '[info][title]差替シフト表送付[/title]\nお疲れ様です。\n医師不在となっていた以下の枠の医師が確定いたしましたので、差し替え版をお送りいたします。\n\n【確定した枠】\n・' + filledVacancies.join('\n・') + '\n\n適宜ご確認をお願いいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
+  } else {
+    // 差分の中身に応じてメッセージを動的に組み立てる
+    var diffMessage = '';
+    if (diffs.filled && diffs.filled.length > 0) {
+      diffMessage += '【医師が確定した枠】\n・' + diffs.filled.join('\n・') + '\n\n';
+    }
+    if (diffs.vacated && diffs.vacated.length > 0) {
+      diffMessage += '【急遽不在(欠員)となった枠】\n・' + diffs.vacated.join('\n・') + '\n\n';
+    }
+
+    message = toText + '[info][title]差替シフト表送付[/title]\nお疲れ様です。\nシフトに変更がございましたので、差し替え版をお送りいたします。\n\n' + diffMessage + '適宜ご確認をお願いいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
   }
 
   // 送信待合室（非表示シート）に予約データを書き込む
@@ -40,10 +52,9 @@ function enqueueChatworkNotification_(clinic, month, type, filledVacancies, pdfF
  */
 function flushChatworkQueue_Morning() {
   // =========================================================
-  // ★ 運用切り替えスイッチ ★
-  // 事業部から「通知開始OK」が出たら、ここを true に変更してください！
+  // ★ 本番稼働ON ★
   // =========================================================
-  var ENABLE_CHATWORK = false;
+  var ENABLE_CHATWORK = true;
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var qSheet = ss.getSheetByName('⚙️_MessageQueue');
@@ -57,7 +68,10 @@ function flushChatworkQueue_Morning() {
 
   var scriptProps = PropertiesService.getScriptProperties();
   var token = scriptProps.getProperty('CHATWORK_API_TOKEN');
-  if (!token) return;
+  if (!token) {
+    Logger.log('【エラー】CHATWORK_API_TOKENが設定されていません。');
+    return;
+  }
 
   // 予約されたメッセージを上から順に処理
   for (var i = 1; i < data.length; i++) {
@@ -99,8 +113,13 @@ function flushChatworkQueue_Morning() {
       };
 
       if (ENABLE_CHATWORK) {
-        UrlFetchApp.fetch(url, options);
-        Logger.log('【送信成功 📤】' + clinicName + ' (Room: ' + roomId + ')');
+        var response = UrlFetchApp.fetch(url, options);
+        var responseCode = response.getResponseCode();
+        if (responseCode >= 200 && responseCode < 300) {
+          Logger.log('【送信成功 📤】' + clinicName + ' (Room: ' + roomId + ')');
+        } else {
+          Logger.log('【送信エラー ❌】' + clinicName + ' (HTTP: ' + responseCode + '): ' + response.getContentText());
+        }
       } else {
         Logger.log('【送信ミュート中🔇】' + clinicName + ' 宛のチャット送信を消化（保留）しました。');
       }

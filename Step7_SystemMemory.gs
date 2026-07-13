@@ -1,33 +1,10 @@
 /**
  * ========================================
- * 差分比較 ＆ データ記憶モジュール
+ * ⚙️ データ記憶 ＆ ハッシュ計算モジュール
  * ========================================
+ * システムが前回の状態を記憶し、変更を検知するための裏側の仕組みです。
+ * ※差分比較ロジックは本番デーモン内に統合されたため、ここには記憶システムのみ残します。
  */
-
-/**
- * 過去のシフトと今のシフトを比較し、「空欄から名前が入った」日付・枠を抽出する
- */
-function getFilledVacancies_(oldSched, newSched) {
-  var filledMsgs = [];
-  if (!oldSched) return filledMsgs;
-  
-  Object.keys(newSched).forEach(function(dKey) {
-    var dateStr = parseInt(dKey.substring(4, 6), 10) + "月" + parseInt(dKey.substring(6, 8), 10) + "日";
-    ['am', 'pm'].forEach(function(slot) {
-      var oldDocs = (oldSched[dKey] && oldSched[dKey][slot]) ? oldSched[dKey][slot] : [];
-      var newDocs = newSched[dKey][slot] || [];
-
-      var oldHasDoc = oldDocs.some(function(d) { return d.name && d.name.replace(/\s/g, '') !== ""; });
-      var newHasDoc = newDocs.some(function(d) { return d.name && d.name.replace(/\s/g, '') !== ""; });
-
-      if (!oldHasDoc && newHasDoc) {
-        var slotName = (slot === 'am') ? '午前' : '午後(夜間含む)';
-        filledMsgs.push(dateStr + "の" + slotName);
-      }
-    });
-  });
-  return filledMsgs;
-}
 
 /**
  * システム記憶用：状態の保存
@@ -70,6 +47,7 @@ function getSavedScheduleState_(clinicNo, year, month) {
 
 /**
  * ハッシュ計算用関数
+ * （データの文字列を暗号化して短い文字列にし、変更があったかを高速判定する）
  */
 function computeMD5_(input) {
   var rawHash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, input, Utilities.Charset.UTF_8);

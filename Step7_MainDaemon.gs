@@ -1,11 +1,11 @@
 /**
  * ========================================
- * 🌟 本番用：全拠点 自動監視デーモン（完全決定版）
+ * 🌟 本番用：夜間自動監視 ＆ 送信予約デーモン（完全決定版）
  * ========================================
  * （日付バグ修正 ＆ スパム通知防止 ＆ 欠員・追加検知 搭載）
- * ※8月以降の本番稼働時に、毎日朝にトリガー起動させるスクリプトです。
+ * 夜中に変更をスキャンし、必要なものだけをキュー（待合室）に予約します。
  */
-function daemon_Main_AllClinics() {
+function daemon_checkAndSyncSchedules() {
   var today = new Date();
   var currentYear = today.getFullYear();
   var currentMonth = today.getMonth() + 1;
@@ -22,7 +22,7 @@ function daemon_Main_AllClinics() {
     targets.push({ year: nextYear, month: nextMonth, isNewMonth: true });
   }
 
-  Logger.log('====== 🌟 本番デーモン (全拠点監視) 起動 ======');
+  Logger.log('====== 🌟 本番デーモン (夜間監視＆予約) 起動 ======');
 
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var props = PropertiesService.getDocumentProperties();
@@ -43,8 +43,6 @@ function daemon_Main_AllClinics() {
     }
     
     context.clinicMaster.list.forEach(function(clinic) {
-      // ★ PoCとは違い、全拠点が対象になるため拠点長での絞り込みは行いません
-      
       // 開院判定
       var targetVal = TARGET_YEAR * 12 + TARGET_MONTH;
       if (clinic.openDate && Object.prototype.toString.call(clinic.openDate) === '[object Date]') {
@@ -61,7 +59,6 @@ function daemon_Main_AllClinics() {
       var scheduleStr = JSON.stringify(currentSchedule);
       var currentHash = computeMD5_(scheduleStr);
       
-      // 本番用の記憶キー（PoCとは別枠で管理します）
       var propKey = 'DAEMON_HASH_' + TARGET_YEAR + '_' + TARGET_MONTH + '_' + clinicNo;
       var lastHash = props.getProperty(propKey);
       
@@ -84,11 +81,10 @@ function daemon_Main_AllClinics() {
 
         if (!shouldSendChat) {
           Logger.log('⏩ ' + clinic.name + ' : 細かな変更のため通知スキップ（データは裏で最新化します）');
-          // 通知はしないが、システムが「直した状態」を記憶するように上書き更新だけ行う
           props.setProperty(propKey, currentHash);
           saveScheduleState_(clinicNo, TARGET_YEAR, TARGET_MONTH, currentSchedule);
         } else {
-          Logger.log('🔥 【処理開始】' + clinic.name + ' (' + TARGET_MONTH + '月分) - チャット送信あり');
+          Logger.log('🔥 【処理開始】' + clinic.name + ' (' + TARGET_MONTH + '月分) - 送信予約あり');
           
           var maxRetries = 2;
           for (var attempt = 1; attempt <= maxRetries; attempt++) {
@@ -103,20 +99,16 @@ function daemon_Main_AllClinics() {
               var pdfFile = exportSheetToPDF(sheet, TARGET_YEAR, TARGET_MONTH, clinic.name);
               if (!pdfFile) throw new Error('PDF生成失敗');
               
-              var pdfBlob = pdfFile.getBlob();
               var sheetUrl = ss.getUrl() + '#gid=' + sheet.getSheetId();
-              var type = isFirstTime ? 'monthly' : 'filled';
               
-              var finalRoomId = clinic.chatId; // 本番は必ず本番ルームへ送信
-              if (finalRoomId) {
-                Logger.log('📥 Chatwork送信中... (宛先: ' + finalRoomId + ')');
-                main_sendChatworkDirectly_(clinic, TARGET_MONTH, type, diffs, pdfBlob, sheetUrl, finalRoomId);
-              }
+              // ★ 直に送るのではなく、朝9時用のキュー（待合室）に予約する
+              var type = isFirstTime ? 'monthly' : 'filled';
+              enqueueChatworkNotification_(clinic, TARGET_MONTH, type, diffs, pdfFile, sheetUrl);
               
               props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr);
               props.setProperty(propKey, currentHash);
               saveScheduleState_(clinicNo, TARGET_YEAR, TARGET_MONTH, currentSchedule);
-              sheet.getRange('A1').setNote('🔄 自動更新: ' + nowStr + '\n(ハッシュ: ' + currentHash + ')');
+              sheet.getRange('A1').setNote('🔄 最終変更検知・更新: ' + nowStr + '\n(データハッシュ: ' + currentHash + ')');
               needIndexUpdate = true;
               
               break; 
@@ -131,8 +123,6 @@ function daemon_Main_AllClinics() {
           }
         }
         Utilities.sleep(1500); 
-      } else {
-        Logger.log('✅ ' + clinic.name + ' は変更なし (スキップ)');
       }
     });
   });
@@ -149,7 +139,6 @@ function checkScheduleDifferences_Main_(oldSched, newSched) {
   if (!oldSched) return diff;
   
   Object.keys(newSched).forEach(function(dKey) {
-    // ハイフンを除去して安全に月日を抽出
     var cleanKey = dKey.replace(/-/g, ''); 
     var dateStr = parseInt(cleanKey.substring(4, 6), 10) + "月" + parseInt(cleanKey.substring(6, 8), 10) + "日";
     
@@ -170,58 +159,4 @@ function checkScheduleDifferences_Main_(oldSched, newSched) {
     });
   });
   return diff;
-}
-
-/**
- * 【本番用】Chatwork直接送信関数
- */
-function main_sendChatworkDirectly_(clinic, month, type, diffs, pdfBlob, sheetUrl, roomId) {
-  var token = PropertiesService.getScriptProperties().getProperty('CHATWORK_API_TOKEN');
-  if (!token) return;
-  
-  var toText = (clinic.leaderId || '') + '\n' + (clinic.sharedAccount || '') + '\n\n';
-  var message = '';
-  
-  if (type === 'monthly') {
-    message = toText + '[info][title]来月のシフト表送付[/title]\nお疲れ様です。来月' + month + '月の【' + clinic.name + '】のシフト表を共有させていただきます。\n医師不在がある箇所は、医師が調整され次第更新版をお送りいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
-  } else {
-    var diffMessage = '';
-    if (diffs.filled.length > 0) {
-      diffMessage += '【医師が確定した枠】\n・' + diffs.filled.join('\n・') + '\n\n';
-    }
-    if (diffs.vacated.length > 0) {
-      diffMessage += '【急遽不在(欠員)となった枠】\n・' + diffs.vacated.join('\n・') + '\n\n';
-    }
-
-    message = toText + '[info][title]差替シフト表送付[/title]\nお疲れ様です。\nシフトに変更がございましたので、差し替え版をお送りいたします。\n\n' + diffMessage + '適宜ご確認をお願いいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
-  }
-
-  try {
-    var boundary = "----WebKitFormBoundary" + Utilities.getUuid().replace(/-/g, '');
-    var payload = [];
-    function appendString(str) {
-      var bytes = Utilities.newBlob(str).getBytes();
-      for (var i = 0; i < bytes.length; i++) { payload.push(bytes[i]); }
-    }
-    appendString("--" + boundary + "\r\n");
-    appendString("Content-Disposition: form-data; name=\"message\"\r\n\r\n");
-    appendString(message + "\r\n");
-    appendString("--" + boundary + "\r\n");
-    appendString("Content-Disposition: form-data; name=\"file\"; filename=\"" + pdfBlob.getName() + "\"\r\n");
-    appendString("Content-Type: " + pdfBlob.getContentType() + "\r\n\r\n");
-    var fileBytes = pdfBlob.getBytes();
-    for (var j = 0; j < fileBytes.length; j++) { payload.push(fileBytes[j]); }
-    appendString("\r\n--" + boundary + "--\r\n");
-
-    var url = 'https://api.chatwork.com/v2/rooms/' + roomId + '/files';
-    var options = {
-      "method": "post",
-      "headers": { "X-ChatWorkToken": token, "Content-Type": "multipart/form-data; boundary=" + boundary },
-      "payload": payload,
-      "muteHttpExceptions": true
-    };
-    UrlFetchApp.fetch(url, options);
-  } catch(e) {
-    Logger.log('❌ Chatwork送信エラー: ' + e.message);
-  }
 }
