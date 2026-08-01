@@ -127,7 +127,7 @@ function daemon_checkAndSyncSchedules() {
     });
   });
   
-  if (needIndexUpdate) rebuildIndexSheet_standalone(ss);
+  if (needIndexUpdate) updateIndexSheet(null, ss);
   Logger.log('====== 🌟 本番デーモン 終了 ======');
 }
 

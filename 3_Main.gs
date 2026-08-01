@@ -13,32 +13,43 @@ var SECOND_BLOCK_SETS = 16;
 var DEPT_LABEL_CLINICS = ['北葛西', '亀有'];
 
 /**
- * 祝日データを取得する
+ * 祝日データを取得する（共通の仕組みを利用するように修正済み）
  */
 function getHolidayMap(year, month) {
-  var ssData = SpreadsheetApp.openById(TOOL_SPREADSHEET_ID).getSheetByName('データセット');
-  var data = ssData.getDataRange().getValues();
-  var fileId = '';
-  for (var i = 0; i < data.length; i++) {
-    if (data[i][0] === '祝日') { fileId = data[i][1]; break; }
+  // ★ データセットから他のファイルと同じ仕組みで読み込む
+  var sources = getDataSources();
+  var src = sources['祝日'];
+  
+  if (!src || !src.id) {
+    Logger.log('【警告】データセットに「祝日」の設定がないか、URLが不正です。');
+    return {};
   }
-  if (!fileId) return {};
 
+  // 今年の年度を計算（1〜3月は前年扱い）
   var fy = (month <= 3) ? year - 1 : year;
   var sheetName = fy + '年度';
+  
   var ss;
   try {
-    ss = SpreadsheetApp.openById(fileId);
-  } catch(e) { return {}; }
+    ss = SpreadsheetApp.openById(src.id);
+  } catch(e) { 
+    Logger.log('【警告】祝日ファイルのオープンに失敗しました: ' + e.message);
+    return {}; 
+  }
 
   var sheet = ss.getSheetByName(sheetName);
-  if (!sheet) return {};
+  if (!sheet) {
+    Logger.log('【警告】祝日ファイルに「' + sheetName + '」シートが見つかりません。');
+    return {};
+  }
 
   var values = sheet.getDataRange().getValues();
   var hMap = {};
   for (var r = 1; r < values.length; r++) {
-    var d = values[r][0];
-    var isHoliday = values[r][3];
+    var d = values[r][0];         // A列：日付
+    var isHoliday = values[r][3]; // D列：祝日フラグ
+    
+    // 日付型であり、かつ祝日フラグ（TRUEなど）が入っている場合のみ登録
     if (Object.prototype.toString.call(d) === '[object Date]' && isHoliday) {
       hMap[dateKey(d)] = true;
     }
@@ -78,26 +89,42 @@ function getClosedDaysMap(year, month) {
 
 /**
  * 高速化のため、重いデータを1回だけ読み込んでcontextを作る。
+ * ★修正：当月シフトの「クリニックNo」が "07" などの文字列になっている問題を解消
  */
 function buildContext(year, month) {
-  var opened = openSource('確定シフト');
+  var today = new Date();
+  var currentYear = today.getFullYear();
+  var currentMonth = today.getMonth() + 1;
+  
+  // 生成対象が「当月」かどうかで参照先シートを切り替え
+  var sourceName = (year === currentYear && month === currentMonth) ? '当月シフト' : '確定シフト';
+  Logger.log('📂 データソース自動選択: ' + year + '年' + month + '月 -> 【 ' + sourceName + ' 】を使用します');
+
+  var opened = openSource(sourceName);
   var values = opened.values;
   var h = opened.headerMap;
-  var idxClinicNo = requireColumn(h, 'クリニックNo', '確定シフト');
-  var idxIki      = requireColumn(h, '医籍番号', '確定シフト');
-  var idxName     = requireColumn(h, '名前', '確定シフト');
-  var idxDate     = requireColumn(h, '勤務日', '確定シフト');
-  var idxStart    = requireColumn(h, '勤務開始時間', '確定シフト');
-  var idxEnd      = requireColumn(h, '勤務終了時間', '確定シフト');
+  
+  var idxClinicNo = requireColumn(h, 'クリニックNo', sourceName);
+  var idxIki      = requireColumn(h, '医籍番号', sourceName);
+  var idxName     = requireColumn(h, '名前', sourceName);
+  var idxDate     = requireColumn(h, '勤務日', sourceName);
+  var idxStart    = requireColumn(h, '勤務開始時間', sourceName);
+  var idxEnd      = requireColumn(h, '勤務終了時間', sourceName);
   var idxDept     = optionalColumn(h, '診療科');
 
   var shiftRows = [];
   for (var i = 1; i < values.length; i++) {
     var row = values[i];
     var d = row[idxDate];
+    
+    // 日付型ではないデータ（空行など）はスキップ
     if (Object.prototype.toString.call(d) !== '[object Date]') continue;
+    
+    // ★ここがゼロ埋め対策！ "07" などの文字列を 数値の 7 に変換します
+    var parsedClinicNo = parseInt(row[idxClinicNo], 10);
+    
     shiftRows.push({
-      clinicNo: row[idxClinicNo],
+      clinicNo: parsedClinicNo,
       ikiNo: normalizeId(row[idxIki]),
       name: String(row[idxName]).trim(),
       dateKey: dateKey(d),

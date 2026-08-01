@@ -54,14 +54,21 @@ function fillBlock(sheet, schedule, context, clinic, year, month, startDay, endD
     var d = new Date(year, month - 1, day);
     var dKey = dateKey(d);
     
-    var dateRange = sheet.getRange(topRow, 1, 2, 1);
-    dateRange.getCell(1,1).setValue(month + '月' + day + '日(' + w[d.getDay()] + ')');
-
-    // 土日祝の色分け処理
+    // 土日祝の判定
     var isSat = d.getDay() === 6;
     var isSun = d.getDay() === 0;
     var isHol = context.holidays[dKey] === true;
     
+    // 曜日文字列の組み立て（祝日なら「祝」を追加する）
+    var dayStr = w[d.getDay()];
+    if (isHol) {
+      dayStr += '祝';
+    }
+
+    var dateRange = sheet.getRange(topRow, 1, 2, 1);
+    dateRange.getCell(1,1).setValue(month + '月' + day + '日(' + dayStr + ')');
+
+    // 土日祝の色分け処理
     if (isSun || isHol) {
       dateRange.setBackground('#f4cccc'); // 赤
     } else if (isSat) {
