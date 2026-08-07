@@ -1,6 +1,6 @@
 /**
  * ========================================
- * 第6段階：PDF自動出力（物理分割・表示バグ修正版）
+ * 第6段階：PDF自動出力（物理分割・はみ出し解消版）
  * ========================================
  */
 
@@ -39,11 +39,11 @@ function exportSheetToPDF(sheet, year, month, clinicName) {
 
   try {
     var page1Sheet = sheet.copyTo(tempSs);
-    page1Sheet.showSheet(); // ★バグ修正：非表示でコピーされても強制的に「表示」させる
+    page1Sheet.showSheet(); // 非表示でコピーされても強制的に「表示」させる
     page1Sheet.setName('Page1');
     
     var page2Sheet = sheet.copyTo(tempSs);
-    page2Sheet.showSheet(); // ★バグ修正：こちらも強制的に「表示」させる
+    page2Sheet.showSheet(); // こちらも強制的に「表示」させる
     page2Sheet.setName('Page2');
 
     // デフォルトの空シートを削除（表示されているシートが確実にある状態で消す）
@@ -52,23 +52,28 @@ function exportSheetToPDF(sheet, year, month, clinicName) {
       tempSs.deleteSheet(defaultSheet);
     }
 
-    // Page1（前半）：36行目（後半のタイトル）以降をすべて削除
+    // 分割基準行（36行目以降を2ページ目とする）
+    var splitRow = 36;
+    
+    // Page1（前半）：後半部分以降をすべて削除
     var maxRows1 = page1Sheet.getMaxRows();
-    if (maxRows1 >= 36) {
-      page1Sheet.deleteRows(36, maxRows1 - 35);
+    if (maxRows1 >= splitRow) {
+      page1Sheet.deleteRows(splitRow, maxRows1 - splitRow + 1);
     }
 
-    // Page2（後半）：1行目〜35行目（前半部分）をすべて削除
-    page2Sheet.deleteRows(1, 35);
+    // Page2（後半）：前半部分をすべて削除
+    page2Sheet.deleteRows(1, splitRow - 1);
 
     SpreadsheetApp.flush();
 
     // 一時ファイル全体をPDF化
+    // ★修正点：scale=2(幅に合わせる)だと縦にはみ出るため、
+    // scale=4(ページに合わせる)に変更して確実に1タブ1ページに収める。
     var url = tempSs.getUrl().replace(/edit$/, '') + 'export?'
       + 'exportFormat=pdf&format=pdf'
       + '&size=A4'
       + '&portrait=true'
-      + '&scale=2'             // 幅に合わせる
+      + '&scale=4'             // ★変更: 4 = ページに合わせる（縦にも横にも収める）
       + '&top_margin=0.25'     // 余白：狭い
       + '&bottom_margin=0.25'
       + '&left_margin=0.25'

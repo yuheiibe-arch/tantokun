@@ -1,6 +1,6 @@
 /**
  * ========================================
- * 第3段階：メイン処理・データ準備
+ * 第3段階：メイン処理・データ準備（保険機能・ヘッダー揺れ対応版）
  * ========================================
  */
 
@@ -16,7 +16,6 @@ var DEPT_LABEL_CLINICS = ['北葛西', '亀有'];
  * 祝日データを取得する（共通の仕組みを利用するように修正済み）
  */
 function getHolidayMap(year, month) {
-  // ★ データセットから他のファイルと同じ仕組みで読み込む
   var sources = getDataSources();
   var src = sources['祝日'];
   
@@ -88,51 +87,96 @@ function getClosedDaysMap(year, month) {
 }
 
 /**
+ * 複数の見出し名の候補から見つかったものを返すヘルパー（ヘッダー揺れ対応）
+ */
+function requireColumnAny(headerMap, headerNames, sheetLabel) {
+  for (var i = 0; i < headerNames.length; i++) {
+    if (headerNames[i] in headerMap) {
+      return headerMap[headerNames[i]];
+    }
+  }
+  var available = Object.keys(headerMap).join('", "');
+  throw new Error(
+    '「' + sheetLabel + '」に見出し「' + headerNames.join('」または「') + '」が見つかりません。\n' +
+    '存在する見出し: "' + available + '"'
+  );
+}
+
+/**
  * 高速化のため、重いデータを1回だけ読み込んでcontextを作る。
- * ★修正：当月シフトの「クリニックNo」が "07" などの文字列になっている問題を解消
+ * ★改修：権限エラーやデータ0件時にフォールバック（保険）する機能を搭載。
+ *        ヘッダー名の微妙な違いも吸収します。
  */
 function buildContext(year, month) {
   var today = new Date();
   var currentYear = today.getFullYear();
   var currentMonth = today.getMonth() + 1;
   
-  // 生成対象が「当月」かどうかで参照先シートを切り替え
-  var sourceName = (year === currentYear && month === currentMonth) ? '当月シフト' : '確定シフト';
-  Logger.log('📂 データソース自動選択: ' + year + '年' + month + '月 -> 【 ' + sourceName + ' 】を使用します');
-
-  var opened = openSource(sourceName);
-  var values = opened.values;
-  var h = opened.headerMap;
+  // 今月なら「当月」、来月なら「確定」を第一候補とする
+  var isCurrentMonth = (year === currentYear && month === currentMonth);
+  var primarySource = isCurrentMonth ? '当月シフト' : '確定シフト';
+  var fallbackSource = isCurrentMonth ? '確定シフト' : '当月シフト';
   
-  var idxClinicNo = requireColumn(h, 'クリニックNo', sourceName);
-  var idxIki      = requireColumn(h, '医籍番号', sourceName);
-  var idxName     = requireColumn(h, '名前', sourceName);
-  var idxDate     = requireColumn(h, '勤務日', sourceName);
-  var idxStart    = requireColumn(h, '勤務開始時間', sourceName);
-  var idxEnd      = requireColumn(h, '勤務終了時間', sourceName);
-  var idxDept     = optionalColumn(h, '診療科');
-
+  // 第一候補 → 第二候補（保険） の順で試行
+  var attemptSources = [primarySource, fallbackSource];
   var shiftRows = [];
-  for (var i = 1; i < values.length; i++) {
-    var row = values[i];
-    var d = row[idxDate];
+
+  for (var s = 0; s < attemptSources.length; s++) {
+    var sourceName = attemptSources[s];
+    Logger.log('📂 試行: データソース 【 ' + sourceName + ' 】');
     
-    // 日付型ではないデータ（空行など）はスキップ
-    if (Object.prototype.toString.call(d) !== '[object Date]') continue;
-    
-    // ★ここがゼロ埋め対策！ "07" などの文字列を 数値の 7 に変換します
-    var parsedClinicNo = parseInt(row[idxClinicNo], 10);
-    
-    shiftRows.push({
-      clinicNo: parsedClinicNo,
-      ikiNo: normalizeId(row[idxIki]),
-      name: String(row[idxName]).trim(),
-      dateKey: dateKey(d),
-      start: timeToMinutes(row[idxStart]),
-      end: timeToMinutes(row[idxEnd]),
-      dept: (idxDept !== null) ? String(row[idxDept]).trim() : ''
-    });
+    try {
+      var opened = openSource(sourceName);
+      var values = opened.values;
+      var h = opened.headerMap;
+      
+      // ヘッダー名が微妙に違っても吸収
+      var idxClinicNo = requireColumnAny(h, ['クリニックNo', '拠点No', 'クリニック番号'], sourceName);
+      var idxIki      = requireColumnAny(h, ['医籍番号', '医師番号', '医籍登録番号'], sourceName);
+      var idxName     = requireColumnAny(h, ['名前', '氏名', '医師名'], sourceName);
+      var idxDate     = requireColumnAny(h, ['勤務日', '日付', '出勤日'], sourceName);
+      var idxStart    = requireColumnAny(h, ['勤務開始時間', '開始時間', '勤務開始'], sourceName);
+      var idxEnd      = requireColumnAny(h, ['勤務終了時間', '終了時間', '勤務終了'], sourceName);
+      var idxDept = optionalColumn(h, '診療科') || optionalColumn(h, '科目') || null;
+
+      var tempRows = [];
+      var hasTargetMonthData = false;
+
+      for (var i = 1; i < values.length; i++) {
+        var row = values[i];
+        var d = row[idxDate];
+        if (Object.prototype.toString.call(d) !== '[object Date]') continue;
+        
+        // 対象年月のデータが含まれているかチェック
+        if (d.getFullYear() === year && (d.getMonth() + 1) === month) {
+          hasTargetMonthData = true;
+        }
+        
+        var parsedClinicNo = parseInt(row[idxClinicNo], 10);
+        tempRows.push({
+          clinicNo: parsedClinicNo,
+          ikiNo: normalizeId(row[idxIki]),
+          name: String(row[idxName]).trim(),
+          dateKey: dateKey(d),
+          start: timeToMinutes(row[idxStart]),
+          end: timeToMinutes(row[idxEnd]),
+          dept: (idxDept !== null) ? String(row[idxDept]).trim() : ''
+        });
+      }
+
+      // 1件でもあれば採用してループを抜ける
+      if (hasTargetMonthData) {
+        shiftRows = tempRows;
+        Logger.log('✅ 【 ' + sourceName + ' 】から対象月のデータを発見。このデータを使用します。');
+        break; 
+      } else {
+        Logger.log('⚠️ 【 ' + sourceName + ' 】にはデータが0件でした。保険(第二候補)を探します。');
+      }
+    } catch (e) {
+      Logger.log('❌ 【 ' + sourceName + ' 】エラー: ' + e.message + ' -> 保険を探します。');
+    }
   }
+
   return {
     shiftRows: shiftRows,
     doctorMaster: getDoctorMaster(),
