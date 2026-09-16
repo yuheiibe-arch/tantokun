@@ -10,7 +10,26 @@ function onOpen() {
     .addItem('🎮 担当くんを起動', 'openAppUI')
     .addSeparator()
     .addItem('🛑 バックグラウンド処理を強制停止', 'stopBackgroundProcess')
+    .addSeparator()
+    .addItem('📝 所属先変更依頼', 'showFormDialog') // ★ここを追加
     .addToUi();
+}
+
+/**
+ * ★追加：フォームを開くためのダイアログを表示する関数
+ */
+function showFormDialog() {
+  var formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLSe9yFWpRopjnyx46W4CwFGXe99K_KSH1CN0kPr4KtpvGtKILg/viewform?usp=dialog';
+  var html = HtmlService.createHtmlOutput(
+    '<div style="font-family: sans-serif; padding: 10px;">' +
+    '<p>以下のボタンをクリックしてフォームを開いてください。</p>' +
+    '<a href="' + formUrl + '" target="_blank" style="display:inline-block; padding:10px 20px; background:#4a86e8; color:#fff; text-decoration:none; border-radius:5px;">所属先変更依頼フォームを開く</a>' +
+    '</div>'
+  )
+  .setWidth(350)
+  .setHeight(150);
+  
+  SpreadsheetApp.getUi().showModalDialog(html, '所属先変更依頼');
 }
 
 function openAppUI() {
