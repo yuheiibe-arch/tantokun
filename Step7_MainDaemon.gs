@@ -200,24 +200,44 @@ function clearDaemonTriggers_() {
 }
 
 /**
- * 【本番用】差分検知関数
+ * 【本番用】差分検知関数（バイネーム＆重複排除対応版）
  */
 function checkScheduleDifferences_Main_(oldSched, newSched) {
   var diff = { filled: [], vacated: [] };
   if (!oldSched) return diff;
+
+  // 重複を排除してソートされた文字列を返すヘルパー
+  function getUniqueNamesStr(docs) {
+    if (!docs || docs.length === 0) return "";
+    var names = docs.map(function(d){ return d.name ? d.name.replace(/\s/g, '') : ''; })
+                    .filter(function(n){ return n !== ''; });
+    var unique = [];
+    for (var i = 0; i < names.length; i++) {
+      if (unique.indexOf(names[i]) === -1) unique.push(names[i]);
+    }
+    return unique.sort().join(', ');
+  }
+
   Object.keys(newSched).forEach(function(dKey) {
     var cleanKey = dKey.replace(/-/g, ''); 
     var dateStr = parseInt(cleanKey.substring(4, 6), 10) + "月" + parseInt(cleanKey.substring(6, 8), 10) + "日";
+
     ['am', 'pm'].forEach(function(slot) {
       var oldDocs = (oldSched[dKey] && oldSched[dKey][slot]) ? oldSched[dKey][slot] : [];
       var newDocs = newSched[dKey][slot] || [];
-      var oldHasDoc = oldDocs.some(function(d) { return d.name && d.name.replace(/\s/g, '') !== ""; });
-      var newHasDoc = newDocs.some(function(d) { return d.name && d.name.replace(/\s/g, '') !== ""; });
+
+      var oldNames = getUniqueNamesStr(oldDocs);
+      var newNames = getUniqueNamesStr(newDocs);
       var slotName = (slot === 'am') ? '午前' : '午後(夜間含む)';
-      if (!oldHasDoc && newHasDoc) {
-        diff.filled.push(dateStr + "の" + slotName);
-      } else if (oldHasDoc && !newHasDoc) {
-        diff.vacated.push(dateStr + "の" + slotName);
+
+      if (oldNames !== newNames) {
+        if (oldNames === "" && newNames !== "") {
+          diff.filled.push(dateStr + "の" + slotName + " (" + newNames + " が追加)");
+        } else if (oldNames !== "" && newNames === "") {
+          diff.vacated.push(dateStr + "の" + slotName + " (" + oldNames + " が削除)");
+        } else {
+          diff.filled.push(dateStr + "の" + slotName + " (変更: " + oldNames + " → " + newNames + ")");
+        }
       }
     });
   });
