@@ -3,92 +3,318 @@
 <head>
   <base target="_top">
   <style>
-    body { font-family: 'Noto Sans JP', sans-serif; padding: 15px; color: #333; background-color: #f9f9f9; }
-    h2 { font-size: 18px; border-bottom: 2px solid #4a86e8; padding-bottom: 5px; margin-top: 0; }
-    .form-group { margin-bottom: 15px; }
-    label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 14px; }
-    input[type="text"], select, textarea {
-      width: 100%; padding: 8px; box-sizing: border-box; 
-      border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+    body { font-family: 'Noto Sans JP', sans-serif; padding: 15px; color: #333; background-color: #f9f9f9; overflow: hidden; }
+    h2 { font-size: 18px; border-bottom: 2px solid #4a86e8; padding-bottom: 5px; margin-top: 0; margin-bottom: 15px; }
+    .form-group { margin-bottom: 12px; }
+    label { display: block; font-weight: bold; margin-bottom: 4px; font-size: 13px; }
+    input[type="text"], input[type="number"], select, textarea {
+      width: 100%; padding: 7px; box-sizing: border-box; 
+      border: 1px solid #ccc; border-radius: 4px; font-size: 13px;
     }
-    textarea { resize: vertical; height: 60px; }
-    .btn-container { text-align: center; margin-top: 25px; }
+    textarea { resize: none; height: 65px; }
+    .checkbox-group { display: flex; flex-direction: column; gap: 6px; background: #fff; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    .checkbox-group label { font-weight: normal; cursor: pointer; display: flex; align-items: center; margin: 0; font-size: 13px; }
+    .checkbox-group label.disabled-item { color: #aaa; cursor: not-allowed; }
+    .checkbox-group input[type="checkbox"] { width: auto; margin-right: 8px; transform: scale(1.1); }
+    .btn-container { text-align: center; margin-top: 15px; }
     .btn {
       background-color: #4a86e8; color: white; border: none; 
-      padding: 10px 25px; font-size: 16px; border-radius: 4px; 
-      cursor: pointer; font-weight: bold;
+      padding: 10px 25px; font-size: 15px; border-radius: 4px; 
+      cursor: pointer; font-weight: bold; width: 100%;
     }
     .btn:hover { background-color: #3a6ecc; }
     .btn:disabled { background-color: #ccc; cursor: not-allowed; }
-    #message { margin-top: 15px; text-align: center; font-weight: bold; font-size: 14px; }
+    #message { margin-top: 10px; text-align: center; font-weight: bold; font-size: 13px; }
     .success { color: #2e7d32; }
     .error { color: #c62828; }
+    .flex-row { display: flex; gap: 8px; align-items: center; }
+    .grid-container { display: flex; gap: 20px; }
+    .col { flex: 1; display: flex; flex-direction: column; }
+    #duplicateWarning { color: #e60012; font-weight: bold; font-size: 12px; margin-top: 5px; display: none; }
   </style>
 </head>
 <body>
-  <h2>受講依頼フォーム</h2>
-  <div id="form-area">
-    <div class="form-group">
-      <label for="clinicName">依頼元拠点名 <span style="color:red;">*</span></label>
-      <input type="text" id="clinicName" placeholder="例: 稲毛海岸" required>
+  <h2>舌下・オンライン 受講依頼</h2>
+  <div id="form-area" class="grid-container">
+    
+    <div class="col">
+      <div class="form-group">
+        <label>1. 対象月</label>
+        <div class="flex-row">
+          <input type="number" id="tYear" style="width: 80px;"> 年 
+          <input type="number" id="tMonth" min="1" max="12" style="width: 60px;"> 月
+        </div>
+      </div>
+      
+      <div class="form-group">
+        <label>2. 拠点選択</label>
+        <div class="flex-row" style="margin-bottom: 8px;">
+          <select id="areaSel" onchange="updateGroups()"><option value="">エリア...</option></select>
+          <select id="groupSel" onchange="updateClinics()"><option value="">グループ...</option></select>
+        </div>
+        <select id="clinicSel" onchange="fetchDoctors()"><option value="">拠点を選択してください</option></select>
+      </div>
+
+      <div class="form-group">
+        <label>3. 対象医師（当月NGの医師） <span style="color:red;">*</span></label>
+        <select id="doctorSel" required onchange="updateCheckboxes()">
+          <option value="">-- 拠点を先に選択してください --</option>
+        </select>
+        <div id="docLoading" style="font-size:12px; color:#666; margin-top:5px; display:none;">🔄 医師データを抽出中...</div>
+        <div id="duplicateWarning"></div>
+      </div>
     </div>
-    <div class="form-group">
-      <label for="doctorName">対象の医師名 <span style="color:red;">*</span></label>
-      <input type="text" id="doctorName" placeholder="例: 山田太郎" required>
+
+    <div class="col">
+      <div class="form-group">
+        <label>4. 依頼内容 <span style="color:red;">*</span></label>
+        <div class="checkbox-group">
+          <label id="lblZekka" class="disabled-item">
+            <input type="checkbox" id="chkZekka" name="trainingType" value="舌下免疫療法 E-ラーニング" disabled> 舌下免疫療法 E-ラーニング
+          </label>
+          <label id="lblOnline" class="disabled-item">
+            <input type="checkbox" id="chkOnline" name="trainingType" value="オンライン診療研修" disabled> オンライン診療研修
+          </label>
+        </div>
+        <div style="font-size: 11px; color: #888; margin-top: 4px;">※ 対象が1つの場合は自動でチェックが入ります</div>
+      </div>
+
+      <div class="form-group" style="flex-grow: 1;">
+        <label>5. 備考（任意）</label>
+        <textarea id="notes" placeholder="その他、伝達事項があればご記入ください"></textarea>
+      </div>
+
+      <div class="btn-container" style="margin-top: auto;">
+        <button class="btn" id="submitBtn" onclick="submitForm()">送信する</button>
+      </div>
     </div>
-    <div class="form-group">
-      <label for="trainingType">依頼内容（受講させたいもの） <span style="color:red;">*</span></label>
-      <select id="trainingType" required>
-        <option value="">-- 選択してください --</option>
-        <option value="舌下免疫療法 E-ラーニング">舌下免疫療法 E-ラーニング</option>
-        <option value="オンライン診療研修">オンライン診療研修</option>
-        <option value="舌下 ＋ オンライン 両方">舌下 ＋ オンライン 両方</option>
-      </select>
-    </div>
-    <div class="form-group">
-      <label for="notes">備考（任意）</label>
-      <textarea id="notes" placeholder="その他、DS部へ伝達事項があればご記入ください"></textarea>
-    </div>
-    <div class="btn-container">
-      <button class="btn" id="submitBtn" onclick="submitForm()">送信する</button>
-    </div>
+    
   </div>
   <div id="message"></div>
 
   <script>
-    function submitForm() {
-      var clinicName = document.getElementById('clinicName').value.trim();
-      var doctorName = document.getElementById('doctorName').value.trim();
-      var trainingType = document.getElementById('trainingType').value;
-      var notes = document.getElementById('notes').value.trim();
-      var msgDiv = document.getElementById('message');
-      var btn = document.getElementById('submitBtn');
+    var globalHierarchy = {};
+    
+    window.onload = function() {
+      google.script.run.withSuccessHandler(initData).getUIData();
+      document.getElementById('tYear').addEventListener('change', fetchDoctors);
+      document.getElementById('tMonth').addEventListener('change', fetchDoctors);
+    };
 
-      if (!clinicName || !doctorName || !trainingType) {
-        msgDiv.className = 'error';
-        msgDiv.innerText = '必須項目（*）をすべて入力してください。';
+    function initData(data) {
+      globalHierarchy = data.hierarchy;
+      var today = new Date();
+      document.getElementById('tYear').value = today.getFullYear();
+      document.getElementById('tMonth').value = today.getMonth() + 1;
+
+      var areaSel = document.getElementById('areaSel');
+      areaSel.innerHTML = '<option value="">エリアを選択してください</option>';
+      Object.keys(globalHierarchy).forEach(function(area) {
+        areaSel.innerHTML += '<option value="' + area + '">' + area + '</option>';
+      });
+    }
+
+    function updateGroups() {
+      var area = document.getElementById('areaSel').value;
+      var groupSel = document.getElementById('groupSel');
+      var clinicSel = document.getElementById('clinicSel');
+      
+      groupSel.innerHTML = '<option value="">グループを選択してください</option>';
+      clinicSel.innerHTML = '<option value="">拠点を先に選択してください</option>';
+      resetDoctorAndCheckboxes();
+      
+      if (area && globalHierarchy[area]) {
+        Object.keys(globalHierarchy[area]).forEach(function(group) {
+          // ★ 表示名だけをすり替える処理
+          var displayGroup = group;
+          if (group === '関東第一') displayGroup = '東京第一';
+          if (group === '関東第二') displayGroup = '東京第二';
+          
+          groupSel.innerHTML += '<option value="' + group + '">' + displayGroup + '</option>';
+        });
+      }
+    }
+
+    function updateClinics() {
+      var area = document.getElementById('areaSel').value;
+      var group = document.getElementById('groupSel').value;
+      var clinicSel = document.getElementById('clinicSel');
+      
+      clinicSel.innerHTML = '<option value="">拠点を指定してください</option>';
+      resetDoctorAndCheckboxes();
+
+      if (area && group && globalHierarchy[area][group]) {
+        globalHierarchy[area][group].forEach(function(c) {
+          clinicSel.innerHTML += '<option value="' + c.clinicNo + '" data-name="' + c.name + '">' + c.name + '</option>';
+        });
+      }
+    }
+
+    function resetDoctorAndCheckboxes() {
+      document.getElementById('doctorSel').innerHTML = '<option value="">-- 拠点を先に選択してください --</option>';
+      updateCheckboxes();
+    }
+
+    function fetchDoctors() {
+      var clinicSel = document.getElementById('clinicSel');
+      var docSel = document.getElementById('doctorSel');
+      var loading = document.getElementById('docLoading');
+      var cNo = clinicSel.value;
+      var y = document.getElementById('tYear').value;
+      var m = document.getElementById('tMonth').value;
+
+      if (!cNo) {
+        resetDoctorAndCheckboxes();
         return;
       }
 
-      // 送信中UIに変更
+      docSel.innerHTML = '<option value="">読込中...</option>';
+      docSel.disabled = true;
+      loading.style.display = 'block';
+      
+      updateCheckboxes(true);
+
+      google.script.run
+        .withSuccessHandler(function(docs) {
+          loading.style.display = 'none';
+          docSel.disabled = false;
+          docSel.innerHTML = '<option value="">-- 対象医師を選択 --</option>';
+          
+          if (docs.length === 0) {
+            docSel.innerHTML += '<option value="" disabled>該当月・該当拠点でNGの医師はいません</option>';
+          } else {
+            docs.forEach(function(d) {
+              var ngList = [];
+              if (d.zekka !== 'OK') ngList.push('舌下');
+              if (d.online !== 'OK') ngList.push('オンライン');
+              
+              var label = d.name + ' (' + ngList.join('・') + 'NG)';
+              
+              var reqAttr = "";
+              if (d.requestedInfo) {
+                 reqAttr = ' data-req-clinic="' + d.requestedInfo.clinic + '" data-req-date="' + d.requestedInfo.date + '" data-req-status="' + d.requestedInfo.status + '"';
+              }
+              
+              docSel.innerHTML += '<option value="' + d.name + '" data-iki="' + d.ikiNo + '" data-zekka="' + d.zekka + '" data-online="' + d.online + '" data-closest-date="' + d.closestDateStr + '"' + reqAttr + '>' + label + '</option>';
+            });
+          }
+        })
+        .withFailureHandler(function(err) {
+          loading.style.display = 'none';
+          docSel.disabled = false;
+          docSel.innerHTML = '<option value="">取得エラー</option>';
+        })
+        .getNgDoctorsForForm(cNo, y, m);
+    }
+
+    function updateCheckboxes(forceDisable) {
+      var docSel = document.getElementById('doctorSel');
+      var chkZekka = document.getElementById('chkZekka');
+      var chkOnline = document.getElementById('chkOnline');
+      var lblZekka = document.getElementById('lblZekka');
+      var lblOnline = document.getElementById('lblOnline');
+      
+      var warnDiv = document.getElementById('duplicateWarning');
+      var btn = document.getElementById('submitBtn');
+
+      if (forceDisable || docSel.selectedIndex <= 0) {
+        chkZekka.disabled = true; chkZekka.checked = false; lblZekka.className = 'disabled-item';
+        chkOnline.disabled = true; chkOnline.checked = false; lblOnline.className = 'disabled-item';
+        warnDiv.style.display = 'none';
+        btn.disabled = false;
+        return;
+      }
+
+      var opt = docSel.options[docSel.selectedIndex];
+      var reqClinic = opt.getAttribute('data-req-clinic');
+      var reqDate = opt.getAttribute('data-req-date');
+      var reqStatus = opt.getAttribute('data-req-status');
+
+      if (reqClinic && reqDate) {
+        warnDiv.innerText = reqClinic + "から依頼出ています。（" + reqDate + " / 状況: " + reqStatus + "）";
+        warnDiv.style.display = 'block';
+        
+        chkZekka.disabled = true; chkZekka.checked = false; lblZekka.className = 'disabled-item';
+        chkOnline.disabled = true; chkOnline.checked = false; lblOnline.className = 'disabled-item';
+        
+        btn.disabled = true; 
+        return;
+      } else {
+        warnDiv.style.display = 'none';
+        btn.disabled = false;
+      }
+
+      var isZekkaNg = (opt.getAttribute('data-zekka') !== 'OK');
+      var isOnlineNg = (opt.getAttribute('data-online') !== 'OK');
+
+      chkZekka.disabled = !isZekkaNg;
+      lblZekka.className = isZekkaNg ? '' : 'disabled-item';
+
+      chkOnline.disabled = !isOnlineNg;
+      lblOnline.className = isOnlineNg ? '' : 'disabled-item';
+
+      if (isZekkaNg && !isOnlineNg) {
+        chkZekka.checked = true;
+        chkOnline.checked = false;
+      } else if (!isZekkaNg && isOnlineNg) {
+        chkZekka.checked = false;
+        chkOnline.checked = true;
+      } else if (isZekkaNg && isOnlineNg) {
+        chkZekka.checked = false;
+        chkOnline.checked = false;
+      } else {
+        chkZekka.checked = false;
+        chkOnline.checked = false;
+      }
+    }
+
+    function submitForm() {
+      var clinicSel = document.getElementById('clinicSel');
+      var clinicName = clinicSel.options[clinicSel.selectedIndex] ? clinicSel.options[clinicSel.selectedIndex].getAttribute('data-name') : '';
+      
+      var docOpt = document.getElementById('doctorSel').options[document.getElementById('doctorSel').selectedIndex];
+      var doctorName = docOpt.value;
+      var closestDate = docOpt.getAttribute('data-closest-date');
+      var ikiNo = docOpt.getAttribute('data-iki'); 
+      
+      var notes = document.getElementById('notes').value.trim();
+      var y = document.getElementById('tYear').value;
+      var m = document.getElementById('tMonth').value;
+
+      var checkboxes = document.querySelectorAll('input[name="trainingType"]:checked');
+      var selectedTrainings = [];
+      checkboxes.forEach(function(cb) { selectedTrainings.push(cb.value); });
+
+      var msgDiv = document.getElementById('message');
+      var btn = document.getElementById('submitBtn');
+
+      if (!clinicName || !doctorName || selectedTrainings.length === 0) {
+        msgDiv.className = 'error';
+        msgDiv.innerText = '必須項目（*）をすべて入力・選択してください。';
+        return;
+      }
+
       btn.disabled = true;
       btn.innerText = '送信中...';
       msgDiv.innerText = '';
 
       var formData = {
+        year: y,
+        month: m,
         clinicName: clinicName,
         doctorName: doctorName,
-        trainingType: trainingType,
+        closestDate: closestDate, 
+        ikiNo: ikiNo, 
+        trainingTypes: selectedTrainings.join('、'),
         notes: notes
       };
 
-      // GAS側の関数を呼び出し
       google.script.run
         .withSuccessHandler(function(response) {
           if (response.success) {
             document.getElementById('form-area').style.display = 'none';
             msgDiv.className = 'success';
-            msgDiv.innerHTML = '依頼を送信しました。<br>このウィンドウは自動的に閉じます。<br><br>' + (response.message ? '<span style="font-size:12px; color:#666;">'+response.message+'</span>' : '');
+            msgDiv.innerHTML = '依頼を送信しました。<br>このウィンドウは自動的に閉じます。<br><br><span style="font-size:12px; color:#666;">' + (response.message || '') + '</span>';
             setTimeout(function() { google.script.host.close(); }, 2500);
           } else {
             btn.disabled = false;
