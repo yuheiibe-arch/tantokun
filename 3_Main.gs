@@ -233,7 +233,6 @@ function generateScheduleWithContext(context, clinicNo, year, month, targetFolde
   }
 
   // --- 2. 別表（資格表）を作成 ---
-  // 先ほど作成した 7_QualTable.gs の関数を呼び出します
   var qualResult = null;
   try {
      qualResult = generateQualTable(context, clinicNo, year, month, targetFolder);
@@ -244,11 +243,12 @@ function generateScheduleWithContext(context, clinicNo, year, month, targetFolde
   // --- 3. 目次（リンク集）へ書き込み ---
   updateIndexLinks(year, month, clinic.name, shiftSheetUrl, qualResult ? qualResult.sheetUrl : '');
 
-  // 返り値を拡張（これまでの sheet に加え、PDFファイル等をまとめたオブジェクトを返すようにする）
+  // ★修正：返り値に「別表のURL (qualSheetUrl)」を含めるように変更
   return {
      sheet: sheet,
      shiftPdf: shiftPdf,
-     qualPdf: qualResult ? qualResult.pdfFile : null
+     shiftSheetUrl: shiftSheetUrl,
+     qualSheetUrl: qualResult ? qualResult.sheetUrl : null
   };
 }
 

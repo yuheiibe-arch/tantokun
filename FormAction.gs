@@ -1,13 +1,10 @@
 /**
  * ========================================
- * 所属先変更フォーム 連携モジュール（「別途記載」対応 ＆ 1メッセージ統合版）
+ * 所属先変更フォーム 連携モジュール
+ * ★改修: シフト表はPDF添付、別表はURLのみで送信する仕様
  * ========================================
  */
 
-/**
- * 1. フォーム送信時トリガー（チェックボックス準備・マスタ更新・シフト再生成・Chatwork送信）
- * ※インストーラブルトリガー（フォーム送信時）で設定
- */
 function onFormSubmit_ShiftChange(e) {
   var sheet = e.range.getSheet();
   if (sheet.getName() !== '変更依頼') return;
@@ -15,7 +12,6 @@ function onFormSubmit_ShiftChange(e) {
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var headerMap = buildHeaderMap(headers);
 
-  // 列の特定
   var idxId = headerMap['医籍登録番号（数字のみ）'];
   var idxName = headerMap['医師名'];
   var idxUrl = headerMap['該当行'];
@@ -30,7 +26,6 @@ function onFormSubmit_ShiftChange(e) {
     }
   }
 
-  // 送信された行の取得
   var row = e.range.getRow();
   var dataRow = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0];
 
@@ -40,43 +35,32 @@ function onFormSubmit_ShiftChange(e) {
   var newClinic = String(dataRow[idxNewClinic]).trim();
   var desiredName = (idxDesiredName !== undefined) ? String(dataRow[idxDesiredName]).trim() : '';
 
-  // ==========================================
-  // ★「別途記載」が選ばれた場合は「希望の記載名」のテキストを優先する
-  // ==========================================
   if (newClinic === '別途記載' && desiredName !== '') {
     newClinic = desiredName;
   }
 
-  // ==========================================
-  // 新規行の「完了」列にチェックボックスを用意する
-  // ==========================================
   if (idxDone !== undefined) {
     sheet.getRange(row, idxDone + 1).insertCheckboxes();
   }
 
   if (!targetId) return;
 
-  // ① 医師マスタの更新（更新前の所属先を取得するため、更新処理内で現在の所属を取得）
   var oldClinic = getDoctorCurrentWork_(targetId);
 
   var masterUrl = updateDoctorMaster_(targetId, newClinic);
   if (masterUrl && idxUrl !== undefined) {
-    // 該当行URLを書き込み
     sheet.getRange(row, idxUrl + 1).setFormula('=HYPERLINK("' + masterUrl + '", "該当行リンク")');
   }
 
-  // 指定のChatworkルーム（444531491）へ通知を送信
   sendAdminMasterChatworkAlert_(baseClinic, targetName, oldClinic, newClinic);
 
-  // ② 影響範囲（該当医師が勤務している拠点と日付）の洗い出し
   var today = new Date();
   var currentYear = today.getFullYear();
   var currentMonth = today.getMonth() + 1;
   
   var context = buildContext(currentYear, currentMonth);
-  var affectedClinicsMap = {}; // clinicNo -> 勤務日の配列
+  var affectedClinicsMap = {}; 
 
-  // 当月（例: "2026-10"）の文字列を作って絞り込む
   var targetMonthPrefix = currentYear + '-' + ('0' + currentMonth).slice(-2);
 
   var shiftRows = context.shiftRows;
@@ -91,10 +75,8 @@ function onFormSubmit_ShiftChange(e) {
     }
   }
 
-  // ③ シフト再生成とChatwork直接送信（該当拠点へ）
   var affectedClinicNos = Object.keys(affectedClinicsMap);
   if (affectedClinicNos.length > 0) {
-    // フォルダの準備
     var PDF_BASE_FOLDER_ID = '1O5ScGBUVKOvmhjpSrIH_9KbrtkYu_0DB';
     var baseFolder = DriveApp.getFolderById(PDF_BASE_FOLDER_ID);
     var folderName = currentYear + '年' + ('0' + currentMonth).slice(-2) + '月';
@@ -111,30 +93,23 @@ function onFormSubmit_ShiftChange(e) {
       var clinic = context.clinicMaster.byClinicNo[clinicNo];
       if (!clinic) return;
 
-      // ★シフト表と別表の両方を生成（戻り値はオブジェクト）
       var resultObj = generateScheduleWithContext(context, clinicNo, currentYear, currentMonth, targetFolder);
       SpreadsheetApp.flush();
 
-      var sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl() + '#gid=' + resultObj.sheet.getSheetId();
-
-      // 日付のフォーマット整形
       var dateStrs = affectedClinicsMap[cNoStr].map(function(dk) {
         var parts = dk.split('-');
         return parseInt(parts[1], 10) + '月' + parseInt(parts[2], 10) + '日';
       });
       var dateText = dateStrs.join('、');
 
-      // ★ Chatwork送信（シフト表と別表の情報を1回で送る）
+      // ★ 修正: resultObj.qualPdf ではなく resultObj.qualSheetUrl を引数に渡す
       if (resultObj.shiftPdf) {
-        sendDirectChatworkAlert_(clinic, targetName, dateText, resultObj.shiftPdf, sheetUrl, resultObj.qualPdf);
+        sendDirectChatworkAlert_(clinic, targetName, dateText, resultObj.shiftPdf, resultObj.shiftSheetUrl, resultObj.qualSheetUrl);
       }
     });
   }
 }
 
-/**
- * 2. 編集時トリガー（チェックボックスのON/OFFによるグレーアウトとタイムスタンプ）
- */
 function onEdit(e) {
   if (!e || !e.range) return;
   var sheet = e.range.getSheet();
@@ -158,17 +133,14 @@ function onEdit(e) {
     if (e.value === 'TRUE') {
       var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
       sheet.getRange(row, idxDate + 1).setValue(now);
-      rangeToStyle.setBackground('#e0e0e0'); // グレーアウト
+      rangeToStyle.setBackground('#e0e0e0'); 
     } else {
       sheet.getRange(row, idxDate + 1).clearContent();
-      rangeToStyle.setBackground(null); // 背景色リセット
+      rangeToStyle.setBackground(null); 
     }
   }
 }
 
-/**
- * 医師の現在の所属先を取得するヘルパー関数
- */
 function getDoctorCurrentWork_(targetId) {
   var masterId = '1-Ss0Zo1TZkl01d208_zVpG9DSLWOwLh7DntsvvK81Fc';
   try {
@@ -190,9 +162,6 @@ function getDoctorCurrentWork_(targetId) {
   return '不明';
 }
 
-/**
- * 医師マスタ更新用ヘルパー関数
- */
 function updateDoctorMaster_(targetId, newClinicName) {
   var masterId = '1-Ss0Zo1TZkl01d208_zVpG9DSLWOwLh7DntsvvK81Fc';
   try {
@@ -217,9 +186,6 @@ function updateDoctorMaster_(targetId, newClinicName) {
   return null;
 }
 
-/**
- * 管理用Chatworkルーム（444531491）へ通知を送る関数
- */
 function sendAdminMasterChatworkAlert_(baseClinic, doctorName, oldClinic, newClinic) {
   var roomId = '444531491';
   var token = PropertiesService.getScriptProperties().getProperty('CHATWORK_API_TOKEN');
@@ -249,9 +215,9 @@ function sendAdminMasterChatworkAlert_(baseClinic, doctorName, oldClinic, newCli
 }
 
 /**
- * 変更差し替え用の即時Chatwork送信関数（各拠点向け・1メッセージ統合版）
+ * ★ 修正: 最終引数を qualPdfFile ではなく qualSheetUrl に変更
  */
-function sendDirectChatworkAlert_(clinic, doctorName, dateText, shiftPdfFile, shiftSheetUrl, qualPdfFile) {
+function sendDirectChatworkAlert_(clinic, doctorName, dateText, shiftPdfFile, shiftSheetUrl, qualSheetUrl) {
   var roomId = clinic.chatId; 
   if (!roomId) return;
   
@@ -260,9 +226,9 @@ function sendDirectChatworkAlert_(clinic, doctorName, dateText, shiftPdfFile, sh
 
   var toText = (clinic.leaderId || '') + '\n' + (clinic.sharedAccount || '') + '\n\n';
   
-  // ★追加：別表とシフト表のURLテキスト構築
   var shiftUrlText = shiftSheetUrl ? ('\n保存先URL：\n' + shiftSheetUrl) : '';
-  var qualUrlText  = qualPdfFile ? ('\n\n▼ 舌下・オンライン資格表\n以下のURLをクリックしてご確認ください（印刷不要なためリンクのみ）\n' + qualPdfFile.getUrl()) : '';
+  // ★ 修正: URL文字列をそのまま表示
+  var qualUrlText  = qualSheetUrl ? ('\n\n▼ 舌下・オンライン資格表\n以下のURLをクリックしてご確認ください（印刷不要なためリンクのみ）\n' + qualSheetUrl) : '';
   
   var message = toText + 
     '[info][title]差替シフト表 ＆ 資格表 送付[/title]' +

@@ -8,7 +8,7 @@
 /**
  * 夜間用：すぐに送信せず「送信待合室（キュー）」にメッセージとファイルを予約する
  */
-function enqueueChatworkNotification_(clinic, month, type, diffs, shiftPdfFile, shiftSheetUrl, qualPdfFile) {
+function enqueueChatworkNotification_(clinic, month, type, diffs, shiftPdfFile, shiftSheetUrl, qualSheetUrl) {
   var roomId = clinic.chatId; 
   if (!roomId) {
     Logger.log('【警告】' + clinic.name + ' の送信先ルームIDがないため、送信予約をスキップします。');
@@ -18,7 +18,7 @@ function enqueueChatworkNotification_(clinic, month, type, diffs, shiftPdfFile, 
   var toText = (clinic.leaderId || '') + '\n' + (clinic.sharedAccount || '') + '\n\n';
   var message = '';
 
-  var qualUrlText = qualPdfFile ? ('\n\n▼ 舌下・オンライン資格表\n以下のURLをクリックしてご確認ください（印刷不要なためリンクのみ）\n' + qualPdfFile.getUrl()) : '';
+  var qualUrlText = qualSheetUrl ? ('\n\n▼ 舌下・オンライン資格表\n以下のURLをクリックしてご確認ください（印刷不要なためリンクのみ）\n' + qualSheetUrl) : '';
   
   if (type === 'monthly') {
     message = toText + '[info][title]来月のシフト表 ＆ 資格表 送付[/title]\nお疲れ様です。来月' + month + '月の【' + clinic.name + '】のシフト表および資格表を共有させていただきます。\n医師不在がある箇所は、医師が調整され次第更新版をお送りいたします。\n\n▼ シフト表（PDF添付）\n保存先URL：\n' + shiftSheetUrl + qualUrlText + '\n[/info]';

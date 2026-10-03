@@ -149,7 +149,7 @@ function daemon_processQueue() {
         } else {
           Logger.log('🔥 【処理開始】' + clinic.name + ' (' + TARGET_MONTH + '月分) - 送信予約あり');
           
-          // PDFの保存先フォルダを準備
+          // ★ シフト表PDFのための保存先フォルダを準備する
           var PDF_BASE_FOLDER_ID = '1O5ScGBUVKOvmhjpSrIH_9KbrtkYu_0DB';
           var baseFolder = DriveApp.getFolderById(PDF_BASE_FOLDER_ID);
           var folderName = TARGET_YEAR + '年' + ('0' + TARGET_MONTH).slice(-2) + '月';
@@ -164,7 +164,7 @@ function daemon_processQueue() {
           var maxRetries = 2;
           for (var attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-              // ★ 変更点：シフト表に加えて別表も生成し、戻り値のオブジェクトを受け取る
+              // ★ targetFolder を渡し、シフト表のPDFを生成させる
               var resultObj = generateScheduleWithContext(context, clinicNo, TARGET_YEAR, TARGET_MONTH, targetFolder);
               var sheet = resultObj.sheet;
               SpreadsheetApp.flush();
@@ -176,8 +176,8 @@ function daemon_processQueue() {
               var sheetUrl = ss.getUrl() + '#gid=' + sheet.getSheetId();
               var type = isFirstTime ? 'monthly' : 'filled';
 
-              // ★ 変更点：シフトPDFと別表のPDFの2つをキュー関数に渡す
-              enqueueChatworkNotification_(clinic, TARGET_MONTH, type, diffs, resultObj.shiftPdf, sheetUrl, resultObj.qualPdf);
+              // ★ 修正：resultObj.qualPdf ではなく resultObj.qualSheetUrl（別表のURL）を引数に渡す
+              enqueueChatworkNotification_(clinic, TARGET_MONTH, type, diffs, resultObj.shiftPdf, sheetUrl, resultObj.qualSheetUrl);
               
               props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr);
               props.setProperty(propKey, currentHash);
@@ -224,7 +224,7 @@ function checkScheduleDifferences_Main_(oldSched, newSched) {
   function getUniqueNamesStr(docs) {
     if (!docs || docs.length === 0) return "";
     var names = docs.map(function(d){ return d.name ? d.name.replace(/\s/g, '') : ''; })
-                    .filter(function(n){ return n !== ''; });
+                  .filter(function(n){ return n !== ''; });
     var unique = [];
     for (var i = 0; i < names.length; i++) {
       if (unique.indexOf(names[i]) === -1) unique.push(names[i]);

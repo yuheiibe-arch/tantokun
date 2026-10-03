@@ -1,6 +1,6 @@
 /**
  * ========================================
- * 第5段階：巨大UI起動 ＆ バックグラウンド実行コントローラー（UIスキップ・履歴リンク・目次統一版）
+ * 第5段階：巨大UI起動 ＆ バックグラウンド実行コントローラー（本体目次に別表リンク追加版）
  * ========================================
  */
 
@@ -187,7 +187,7 @@ function processBatch() {
       } else {
         ss.toast(currentIndex + '/' + totalCount + ' 件目を生成中...\n残り ' + queue.length + ' 件', '⚙️ 実行中: ' + clinic.name, 10);
 
-        // ★ targetFolder を渡して、シフト表と別表を両方生成・保存させる
+        // ★ シフト表と別表の両方を生成・保存させる
         var resultObj = generateScheduleWithContext(context, clinicNo, year, month, targetFolder);
         var sheet = resultObj.sheet;
         sheet.showSheet(); 
@@ -196,7 +196,6 @@ function processBatch() {
         props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr); 
         props.setProperty(propKey, currentHash); 
         
-        // フォルダのURL取得
         var folderUrl = targetFolder.getUrl();
         props.setProperty('LAST_FOLDER_URL', folderUrl);
 
@@ -260,7 +259,7 @@ function stopBackgroundProcess() {
 }
 
 /**
- * 目次生成ロジックの統一化（自動監視側と完全に同じ4列スキャン方式）
+ * ★ 目次生成ロジック（別表のリンクも引っ張ってくる完全版）
  */
 function updateIndexSheet(unused_results, ss) {
   if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -277,22 +276,38 @@ function updateIndexSheet(unused_results, ss) {
   indexSheet.clear();
 
   var now = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
-  indexSheet.getRange('A1:D1').merge();
-  indexSheet.getRange('A1').setValue('✨ 担当くん 総合目次 (UI手動生成: ' + now + ')')
-       .setBackground('#4a86e8').setFontColor('white').setFontWeight('bold').setFontSize(12);
-  indexSheet.getRange('A2:D2').setValues([['エリア', '拠点・シート名', '最終更新', 'リンク']])
-       .setBackground('#cccccc').setFontWeight('bold');
+  indexSheet.getRange('A1:E1').merge();
+  indexSheet.getRange('A1').setValue('✨ 担当くん 総合目次 (UI/デーモン自動生成: ' + now + ')')
+        .setBackground('#4a86e8').setFontColor('white').setFontWeight('bold').setFontSize(12);
+  
+  // ★ E列に「別表(資格表)」を追加
+  indexSheet.getRange('A2:E2').setValues([['エリア', '拠点・シート名', '最終更新', 'シフト表', '別表(資格表)']])
+        .setBackground('#cccccc').setFontWeight('bold');
 
   var clinicMaster = getClinicMaster();
   var props = PropertiesService.getDocumentProperties();
   var sheets = ss.getSheets();
   var rows = [];
 
+  // ★ 外部スプシ（別表）のシート一覧を事前取得
+  var qualSs = null;
+  var qualSheetMap = {};
+  try {
+    qualSs = SpreadsheetApp.openById(QUAL_SPREADSHEET_ID);
+    var qSheets = qualSs.getSheets();
+    for (var k = 0; k < qSheets.length; k++) {
+      qualSheetMap[qSheets[k].getName()] = qualSs.getUrl() + '#gid=' + qSheets[k].getSheetId();
+    }
+  } catch (e) {
+    Logger.log('別表スプシの読み込みエラー: ' + e.message);
+  }
+
   for (var i = 0; i < sheets.length; i++) {
     var sName = sheets[i].getName();
     var m = sName.match(/^(\d{2})(.+)$/);
     if (!m) continue; 
     
+    var monthStr = m[1];
     var clinicName = m[2];
     var area = 'その他エリア';
     
@@ -304,14 +319,37 @@ function updateIndexSheet(unused_results, ss) {
     }
     
     var lastUpdate = props.getProperty('LAST_UPDATE_' + sName) || '-';
-    var sheetUrl = ss.getUrl() + '#gid=' + sheets[i].getSheetId();
-    var formula = '=HYPERLINK("' + sheetUrl + '", "開く")';
+    var shiftUrl = ss.getUrl() + '#gid=' + sheets[i].getSheetId();
+    var shiftFormula = '=HYPERLINK("' + shiftUrl + '", "開く")';
+    
+    // ★ 別表のURLを動的に探し出して関数化する
+    var qualLinks = [];
+    var qName1 = monthStr + clinicName + '_別表';
+    var qName2 = monthStr + clinicName + '（小児科）別表';
+    var qName3 = monthStr + clinicName + '（内科）別表';
+
+    if (qualSheetMap[qName1]) {
+      qualLinks.push('HYPERLINK("' + qualSheetMap[qName1] + '", "別表")');
+    } else {
+      // 2つに分かれている場合（北葛西・亀有）
+      if (qualSheetMap[qName2]) qualLinks.push('HYPERLINK("' + qualSheetMap[qName2] + '", "小児科")');
+      if (qualSheetMap[qName3]) qualLinks.push('HYPERLINK("' + qualSheetMap[qName3] + '", "内科")');
+    }
+
+    var qualFormula = '';
+    if (qualLinks.length === 1) {
+      qualFormula = '=' + qualLinks[0];
+    } else if (qualLinks.length === 2) {
+      // & で繋いで「小児科 / 内科」の見た目にする
+      qualFormula = '=' + qualLinks[0] + ' & " / " & ' + qualLinks[1];
+    }
     
     rows.push({
       area: area,
       sheetName: sName,
       lastUpdate: lastUpdate,
-      formula: formula
+      shiftFormula: shiftFormula,
+      qualFormula: qualFormula
     });
   }
 
@@ -322,18 +360,20 @@ function updateIndexSheet(unused_results, ss) {
 
   var valueRows = [];
   rows.forEach(function(row) {
-    valueRows.push([row.area, row.sheetName, row.lastUpdate, row.formula]);
+    // 5列分の配列を作成
+    valueRows.push([row.area, row.sheetName, row.lastUpdate, row.shiftFormula, row.qualFormula]);
   });
 
   if (valueRows.length > 0) {
-    indexSheet.getRange(3, 1, valueRows.length, 4).setValues(valueRows);
-    indexSheet.getRange(2, 1, valueRows.length + 1, 4).setBorder(true, true, true, true, true, true);
+    indexSheet.getRange(3, 1, valueRows.length, 5).setValues(valueRows);
+    indexSheet.getRange(2, 1, valueRows.length + 1, 5).setBorder(true, true, true, true, true, true);
   }
 
   indexSheet.setColumnWidth(1, 120);
   indexSheet.setColumnWidth(2, 200);
   indexSheet.setColumnWidth(3, 160);
   indexSheet.setColumnWidth(4, 80);
+  indexSheet.setColumnWidth(5, 120); // 別表列の幅
 
   return {
     indexUrl: ss.getUrl() + '#gid=' + indexSheet.getSheetId(),
