@@ -1,14 +1,14 @@
 /**
  * ========================================
  * Chatwork連携モジュール（夜間キュー保存 ＆ 朝の一斉送信）
+ * ★改修：シフト表PDF添付＋別表URL記載の統合メッセージに対応
  * ========================================
  */
 
 /**
  * 夜間用：すぐに送信せず「送信待合室（キュー）」にメッセージとファイルを予約する
- * ★PoC知見 반영：欠員(vacated)と補充(filled)の両方を処理できる動的メッセージに対応
  */
-function enqueueChatworkNotification_(clinic, month, type, diffs, pdfFile, sheetUrl) {
+function enqueueChatworkNotification_(clinic, month, type, diffs, shiftPdfFile, shiftSheetUrl, qualPdfFile) {
   var roomId = clinic.chatId; 
   if (!roomId) {
     Logger.log('【警告】' + clinic.name + ' の送信先ルームIDがないため、送信予約をスキップします。');
@@ -17,9 +17,11 @@ function enqueueChatworkNotification_(clinic, month, type, diffs, pdfFile, sheet
   
   var toText = (clinic.leaderId || '') + '\n' + (clinic.sharedAccount || '') + '\n\n';
   var message = '';
+
+  var qualUrlText = qualPdfFile ? ('\n\n▼ 舌下・オンライン資格表\n以下のURLをクリックしてご確認ください（印刷不要なためリンクのみ）\n' + qualPdfFile.getUrl()) : '';
   
   if (type === 'monthly') {
-    message = toText + '[info][title]来月のシフト表送付[/title]\nお疲れ様です。来月' + month + '月の【' + clinic.name + '】のシフト表を共有させていただきます。\n医師不在がある箇所は、医師が調整され次第更新版をお送りいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
+    message = toText + '[info][title]来月のシフト表 ＆ 資格表 送付[/title]\nお疲れ様です。来月' + month + '月の【' + clinic.name + '】のシフト表および資格表を共有させていただきます。\n医師不在がある箇所は、医師が調整され次第更新版をお送りいたします。\n\n▼ シフト表（PDF添付）\n保存先URL：\n' + shiftSheetUrl + qualUrlText + '\n[/info]';
   } else {
     // 差分の中身に応じてメッセージを動的に組み立てる
     var diffMessage = '';
@@ -30,7 +32,7 @@ function enqueueChatworkNotification_(clinic, month, type, diffs, pdfFile, sheet
       diffMessage += '【急遽不在(欠員)となった枠】\n・' + diffs.vacated.join('\n・') + '\n\n';
     }
 
-    message = toText + '[info][title]差替シフト表送付[/title]\nお疲れ様です。\nシフトに変更がございましたので、差し替え版をお送りいたします。\n\n' + diffMessage + '適宜ご確認をお願いいたします。\n\n保存先URL：\n' + sheetUrl + '\n[/info]';
+    message = toText + '[info][title]差替シフト表 ＆ 資格表 送付[/title]\nお疲れ様です。\nシフトに変更がございましたので、最新版をお送りいたします。\n\n' + diffMessage + '適宜ご確認をお願いいたします。\n\n▼ シフト表（PDF添付）\n保存先URL：\n' + shiftSheetUrl + qualUrlText + '\n[/info]';
   }
 
   // 送信待合室（非表示シート）に予約データを書き込む
@@ -43,8 +45,12 @@ function enqueueChatworkNotification_(clinic, month, type, diffs, pdfFile, sheet
   }
 
   var nowStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
-  qSheet.appendRow([nowStr, clinic.name, roomId, message, pdfFile.getId()]);
-  Logger.log('【送信予約 📥】' + clinic.name + ' のメッセージを朝9時配信用に予約しました。');
+  
+  // シフト表のファイルIDとともに、統合されたメッセージを予約
+  if (shiftPdfFile) {
+    qSheet.appendRow([nowStr, clinic.name, roomId, message, shiftPdfFile.getId()]);
+    Logger.log('【送信予約 📥】' + clinic.name + ' のシフト表と資格表リンクを予約しました。');
+  }
 }
 
 /**
@@ -81,7 +87,6 @@ function flushChatworkQueue_Morning() {
     var fileId = data[i][4];
 
     try {
-      // ドライブからPDFを取得（日本語ファイル名もここで復元されます）
       var file = DriveApp.getFileById(fileId);
       var pdfBlob = file.getBlob();
 
@@ -126,10 +131,9 @@ function flushChatworkQueue_Morning() {
     } catch(e) {
       Logger.log('【送信エラー ❌】' + clinicName + ': ' + e.message);
     }
-    Utilities.sleep(1500); // 連続送信によるAPI制限を回避
+    Utilities.sleep(1500); 
   }
 
-  // 全件の送信（または消化）が終わったら、待合室を空っぽにする
   qSheet.clear();
   qSheet.appendRow(['Timestamp', 'ClinicName', 'RoomId', 'Message', 'FileId']);
   Logger.log('【朝の定期配信完了】送信待合室（キュー）をクリアしました。');

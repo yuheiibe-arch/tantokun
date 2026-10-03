@@ -15,6 +15,8 @@
 // ツール本体（担当くん）のスプレッドシートID。ここだけは起点なので定数で持つ。
 var TOOL_SPREADSHEET_ID = '1FPwc7s1Iw_QoNh0rQ-bnz-nuCpn-qiXUe_SKn0ozPMQ';
 var DATASET_SHEET_NAME = 'データセット';
+// ★ 追加：新しい「目次 兼 資格表」のスプレッドシートID
+var QUAL_SPREADSHEET_ID = '1gcKYzbo0DfA5W2WmQ3UMo8eaYVUMF02Iy56JMXA1StY';
 
 
 /**

@@ -1,6 +1,6 @@
 /**
  * ========================================
- * 所属先変更フォーム 連携モジュール（「別途記載」対応版）
+ * 所属先変更フォーム 連携モジュール（「別途記載」対応 ＆ 1メッセージ統合版）
  * ========================================
  */
 
@@ -21,7 +21,7 @@ function onFormSubmit_ShiftChange(e) {
   var idxUrl = headerMap['該当行'];
   var idxDone = headerMap['完了']; 
   var idxBaseClinic = headerMap['１）申告拠点を選択してください。']; 
-  var idxDesiredName = headerMap['希望の記載名']; // ★追加：希望の記載名列の特定
+  var idxDesiredName = headerMap['希望の記載名']; 
   
   var idxNewClinic = -1;
   for (var key in headerMap) {
@@ -41,7 +41,7 @@ function onFormSubmit_ShiftChange(e) {
   var desiredName = (idxDesiredName !== undefined) ? String(dataRow[idxDesiredName]).trim() : '';
 
   // ==========================================
-  // ★追加：「別途記載」が選ばれた場合は「希望の記載名」のテキストを優先する
+  // ★「別途記載」が選ばれた場合は「希望の記載名」のテキストを優先する
   // ==========================================
   if (newClinic === '別途記載' && desiredName !== '') {
     newClinic = desiredName;
@@ -65,7 +65,7 @@ function onFormSubmit_ShiftChange(e) {
     sheet.getRange(row, idxUrl + 1).setFormula('=HYPERLINK("' + masterUrl + '", "該当行リンク")');
   }
 
-  // ★指定のChatworkルーム（444531491）へ通知を送信
+  // 指定のChatworkルーム（444531491）へ通知を送信
   sendAdminMasterChatworkAlert_(baseClinic, targetName, oldClinic, newClinic);
 
   // ② 影響範囲（該当医師が勤務している拠点と日付）の洗い出し
@@ -76,7 +76,7 @@ function onFormSubmit_ShiftChange(e) {
   var context = buildContext(currentYear, currentMonth);
   var affectedClinicsMap = {}; // clinicNo -> 勤務日の配列
 
-  // 当月（例: "2026-08"）の文字列を作って絞り込む
+  // 当月（例: "2026-10"）の文字列を作って絞り込む
   var targetMonthPrefix = currentYear + '-' + ('0' + currentMonth).slice(-2);
 
   var shiftRows = context.shiftRows;
@@ -93,29 +93,43 @@ function onFormSubmit_ShiftChange(e) {
 
   // ③ シフト再生成とChatwork直接送信（該当拠点へ）
   var affectedClinicNos = Object.keys(affectedClinicsMap);
-  affectedClinicNos.forEach(function(cNoStr) {
-    var clinicNo = parseInt(cNoStr, 10);
-    var clinic = context.clinicMaster.byClinicNo[clinicNo];
-    if (!clinic) return;
+  if (affectedClinicNos.length > 0) {
+    // フォルダの準備
+    var PDF_BASE_FOLDER_ID = '1O5ScGBUVKOvmhjpSrIH_9KbrtkYu_0DB';
+    var baseFolder = DriveApp.getFolderById(PDF_BASE_FOLDER_ID);
+    var folderName = currentYear + '年' + ('0' + currentMonth).slice(-2) + '月';
+    var targetFolder;
+    var folders = baseFolder.getFoldersByName(folderName);
+    if (folders.hasNext()) {
+      targetFolder = folders.next();
+    } else {
+      targetFolder = baseFolder.createFolder(folderName);
+    }
 
-    // シフト表の再生成
-    var newSheet = generateScheduleWithContext(context, clinicNo, currentYear, currentMonth);
-    SpreadsheetApp.flush();
+    affectedClinicNos.forEach(function(cNoStr) {
+      var clinicNo = parseInt(cNoStr, 10);
+      var clinic = context.clinicMaster.byClinicNo[clinicNo];
+      if (!clinic) return;
 
-    // PDF化
-    var pdfFile = exportSheetToPDF(newSheet, currentYear, currentMonth, clinic.name);
-    var sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl() + '#gid=' + newSheet.getSheetId();
+      // ★シフト表と別表の両方を生成（戻り値はオブジェクト）
+      var resultObj = generateScheduleWithContext(context, clinicNo, currentYear, currentMonth, targetFolder);
+      SpreadsheetApp.flush();
 
-    // 日付のフォーマット整形
-    var dateStrs = affectedClinicsMap[cNoStr].map(function(dk) {
-      var parts = dk.split('-');
-      return parseInt(parts[1], 10) + '月' + parseInt(parts[2], 10) + '日';
+      var sheetUrl = SpreadsheetApp.getActiveSpreadsheet().getUrl() + '#gid=' + resultObj.sheet.getSheetId();
+
+      // 日付のフォーマット整形
+      var dateStrs = affectedClinicsMap[cNoStr].map(function(dk) {
+        var parts = dk.split('-');
+        return parseInt(parts[1], 10) + '月' + parseInt(parts[2], 10) + '日';
+      });
+      var dateText = dateStrs.join('、');
+
+      // ★ Chatwork送信（シフト表と別表の情報を1回で送る）
+      if (resultObj.shiftPdf) {
+        sendDirectChatworkAlert_(clinic, targetName, dateText, resultObj.shiftPdf, sheetUrl, resultObj.qualPdf);
+      }
     });
-    var dateText = dateStrs.join('、');
-
-    // Chatwork送信
-    sendDirectChatworkAlert_(clinic, targetName, dateText, pdfFile, sheetUrl);
-  });
+  }
 }
 
 /**
@@ -235,9 +249,9 @@ function sendAdminMasterChatworkAlert_(baseClinic, doctorName, oldClinic, newCli
 }
 
 /**
- * 変更差し替え用の即時Chatwork送信関数（各拠点向け）
+ * 変更差し替え用の即時Chatwork送信関数（各拠点向け・1メッセージ統合版）
  */
-function sendDirectChatworkAlert_(clinic, doctorName, dateText, pdfFile, sheetUrl) {
+function sendDirectChatworkAlert_(clinic, doctorName, dateText, shiftPdfFile, shiftSheetUrl, qualPdfFile) {
   var roomId = clinic.chatId; 
   if (!roomId) return;
   
@@ -245,16 +259,22 @@ function sendDirectChatworkAlert_(clinic, doctorName, dateText, pdfFile, sheetUr
   if (!token) return;
 
   var toText = (clinic.leaderId || '') + '\n' + (clinic.sharedAccount || '') + '\n\n';
+  
+  // ★追加：別表とシフト表のURLテキスト構築
+  var shiftUrlText = shiftSheetUrl ? ('\n保存先URL：\n' + shiftSheetUrl) : '';
+  var qualUrlText  = qualPdfFile ? ('\n\n▼ 舌下・オンライン資格表\n以下のURLをクリックしてご確認ください（印刷不要なためリンクのみ）\n' + qualPdfFile.getUrl()) : '';
+  
   var message = toText + 
-    '[info][title]勤務先差し替え連絡[/title]' +
+    '[info][title]差替シフト表 ＆ 資格表 送付[/title]' +
     '勤務先変更要望が医師よりございました。\n' +
     '差し替えを送付します。\n\n' +
     '医師名：' + doctorName + '\n' +
     '該当日：' + dateText + '\n\n' +
-    '保存先URL：\n' + sheetUrl + '\n[/info]';
+    '▼ シフト表（PDF添付）' + shiftUrlText +
+    qualUrlText + '\n[/info]';
 
   try {
-    var pdfBlob = pdfFile.getBlob();
+    var pdfBlob = shiftPdfFile.getBlob(); // 添付はシフト表のみ
     var boundary = "----WebKitFormBoundary" + Utilities.getUuid().replace(/-/g, '');
     var payload = [];
     

@@ -4,29 +4,16 @@
  * ========================================
  */
 
-// 保存先のベースとなるGoogleドライブフォルダID
-var PDF_BASE_FOLDER_ID = '1O5ScGBUVKOvmhjpSrIH_9KbrtkYu_0DB';
-
-function exportSheetToPDF(sheet, year, month, clinicName) {
-  var ss = sheet.getParent();
-
-  // 1. フォルダの準備
-  var baseFolder = DriveApp.getFolderById(PDF_BASE_FOLDER_ID);
-  var folderName = year + '年' + ('0' + month).slice(-2) + '月';
-  var targetFolder;
-
-  var folders = baseFolder.getFoldersByName(folderName);
-  if (folders.hasNext()) {
-    targetFolder = folders.next();
-  } else {
-    targetFolder = baseFolder.createFolder(folderName);
-  }
-
+// ※ targetFolderは呼び出し元(3_Main.gs)から渡されます
+function exportSheetToPDF(sheet, year, month, clinicName, targetFolder) {
   var fileName = year + '年' + ('0' + month).slice(-2) + '月_' + clinicName + '.pdf';
 
-  var existingFiles = targetFolder.getFilesByName(fileName);
-  while (existingFiles.hasNext()) {
-    existingFiles.next().setTrashed(true);
+  // 既存の同名ファイルがあればゴミ箱へ
+  if (targetFolder) {
+    var existingFiles = targetFolder.getFilesByName(fileName);
+    while (existingFiles.hasNext()) {
+      existingFiles.next().setTrashed(true);
+    }
   }
 
   SpreadsheetApp.flush(); 
@@ -39,42 +26,35 @@ function exportSheetToPDF(sheet, year, month, clinicName) {
 
   try {
     var page1Sheet = sheet.copyTo(tempSs);
-    page1Sheet.showSheet(); // 非表示でコピーされても強制的に「表示」させる
+    page1Sheet.showSheet(); 
     page1Sheet.setName('Page1');
     
     var page2Sheet = sheet.copyTo(tempSs);
-    page2Sheet.showSheet(); // こちらも強制的に「表示」させる
+    page2Sheet.showSheet(); 
     page2Sheet.setName('Page2');
 
-    // デフォルトの空シートを削除（表示されているシートが確実にある状態で消す）
     var defaultSheet = tempSs.getSheets()[0];
     if (tempSs.getSheets().length > 1) {
       tempSs.deleteSheet(defaultSheet);
     }
 
-    // 分割基準行（36行目以降を2ページ目とする）
     var splitRow = 36;
     
-    // Page1（前半）：後半部分以降をすべて削除
     var maxRows1 = page1Sheet.getMaxRows();
     if (maxRows1 >= splitRow) {
       page1Sheet.deleteRows(splitRow, maxRows1 - splitRow + 1);
     }
 
-    // Page2（後半）：前半部分をすべて削除
     page2Sheet.deleteRows(1, splitRow - 1);
 
     SpreadsheetApp.flush();
 
-    // 一時ファイル全体をPDF化
-    // ★修正点：scale=2(幅に合わせる)だと縦にはみ出るため、
-    // scale=4(ページに合わせる)に変更して確実に1タブ1ページに収める。
     var url = tempSs.getUrl().replace(/edit$/, '') + 'export?'
       + 'exportFormat=pdf&format=pdf'
       + '&size=A4'
       + '&portrait=true'
-      + '&scale=4'             // ★変更: 4 = ページに合わせる（縦にも横にも収める）
-      + '&top_margin=0.25'     // 余白：狭い
+      + '&scale=4'
+      + '&top_margin=0.25'
       + '&bottom_margin=0.25'
       + '&left_margin=0.25'
       + '&right_margin=0.25'
@@ -94,13 +74,13 @@ function exportSheetToPDF(sheet, year, month, clinicName) {
       throw new Error('PDF出力に失敗しました。');
     }
 
-    var blob = response.getBlob().setName(fileName);
-    var newFile = targetFolder.createFile(blob);
-
-    return newFile;
+    if (targetFolder) {
+      var blob = response.getBlob().setName(fileName);
+      return targetFolder.createFile(blob);
+    }
+    return null;
 
   } finally {
-    // 処理が終わったら、一時的に作ったスプレッドシートを必ずゴミ箱へ捨てる
     DriveApp.getFileById(tempSsId).setTrashed(true);
   }
 }

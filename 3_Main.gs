@@ -104,20 +104,16 @@ function requireColumnAny(headerMap, headerNames, sheetLabel) {
 
 /**
  * 高速化のため、重いデータを1回だけ読み込んでcontextを作る。
- * ★改修：権限エラーやデータ0件時にフォールバック（保険）する機能を搭載。
- *        ヘッダー名の微妙な違いも吸収します。
  */
 function buildContext(year, month) {
   var today = new Date();
   var currentYear = today.getFullYear();
   var currentMonth = today.getMonth() + 1;
   
-  // 今月なら「当月」、来月なら「確定」を第一候補とする
   var isCurrentMonth = (year === currentYear && month === currentMonth);
   var primarySource = isCurrentMonth ? '当月シフト' : '確定シフト';
   var fallbackSource = isCurrentMonth ? '確定シフト' : '当月シフト';
   
-  // 第一候補 → 第二候補（保険） の順で試行
   var attemptSources = [primarySource, fallbackSource];
   var shiftRows = [];
 
@@ -130,7 +126,6 @@ function buildContext(year, month) {
       var values = opened.values;
       var h = opened.headerMap;
       
-      // ヘッダー名が微妙に違っても吸収
       var idxClinicNo = requireColumnAny(h, ['クリニックNo', '拠点No', 'クリニック番号'], sourceName);
       var idxIki      = requireColumnAny(h, ['医籍番号', '医師番号', '医籍登録番号'], sourceName);
       var idxName     = requireColumnAny(h, ['名前', '氏名', '医師名'], sourceName);
@@ -147,7 +142,6 @@ function buildContext(year, month) {
         var d = row[idxDate];
         if (Object.prototype.toString.call(d) !== '[object Date]') continue;
         
-        // 対象年月のデータが含まれているかチェック
         if (d.getFullYear() === year && (d.getMonth() + 1) === month) {
           hasTargetMonthData = true;
         }
@@ -164,7 +158,6 @@ function buildContext(year, month) {
         });
       }
 
-      // 1件でもあれば採用してループを抜ける
       if (hasTargetMonthData) {
         shiftRows = tempRows;
         Logger.log('✅ 【 ' + sourceName + ' 】から対象月のデータを発見。このデータを使用します。');
@@ -188,8 +181,9 @@ function buildContext(year, month) {
 
 /**
  * 1拠点を生成（context使用）。これが本番の生成単位。
+ * ★改修：シフト表に加え、別表(資格表)の生成と、目次へのリンク追記機能を追加
  */
-function generateScheduleWithContext(context, clinicNo, year, month) {
+function generateScheduleWithContext(context, clinicNo, year, month, targetFolder) {
   var ss = SpreadsheetApp.openById(TOOL_SPREADSHEET_ID);
   var clinic = context.clinicMaster.byClinicNo[clinicNo];
   if (!clinic) throw new Error('クリニックNo ' + clinicNo + ' が拠点マスターにありません。');
@@ -198,6 +192,7 @@ function generateScheduleWithContext(context, clinicNo, year, month) {
   var startKey = dateKey(new Date(year, month - 1, 1));
   var endKey   = dateKey(new Date(year, month - 1, lastDay));
 
+  // --- 1. メインのシフト表を作成 ---
   var schedule = collectScheduleFromContext(context, clinicNo, startKey, endKey);
   mergeSameDoctors(schedule);
   
@@ -209,7 +204,6 @@ function generateScheduleWithContext(context, clinicNo, year, month) {
 
   var firstPeriod  = formatPeriod(year, month, 1, month, 15);
   var secondPeriod = formatPeriod(year, month, 16, month, lastDay);
-  
   var deptText = useLabel ? '小児科・内科' : '小児科';
 
   replacePlaceholdersOrdered(sheet, {
@@ -227,8 +221,92 @@ function generateScheduleWithContext(context, clinicNo, year, month) {
 
   trimUnusedRows(sheet, lastDay);
   redrawBorders(sheet, lastDay);
+  SpreadsheetApp.flush();
 
-  return sheet;
+  // シフト表のシートURL
+  var shiftSheetUrl = ss.getUrl() + '#gid=' + sheet.getSheetId();
+  
+  // シフト表のPDFを作成 (第6段階の機能を利用)
+  var shiftPdf = null;
+  if (targetFolder) {
+     shiftPdf = exportSheetToPDF(sheet, year, month, clinic.name, targetFolder);
+  }
+
+  // --- 2. 別表（資格表）を作成 ---
+  // 先ほど作成した 7_QualTable.gs の関数を呼び出します
+  var qualResult = null;
+  try {
+     qualResult = generateQualTable(context, clinicNo, year, month, targetFolder);
+  } catch(e) {
+     Logger.log('⚠️ ' + clinic.name + ' の別表生成に失敗しました: ' + e.message);
+  }
+
+  // --- 3. 目次（リンク集）へ書き込み ---
+  updateIndexLinks(year, month, clinic.name, shiftSheetUrl, qualResult ? qualResult.sheetUrl : '');
+
+  // 返り値を拡張（これまでの sheet に加え、PDFファイル等をまとめたオブジェクトを返すようにする）
+  return {
+     sheet: sheet,
+     shiftPdf: shiftPdf,
+     qualPdf: qualResult ? qualResult.pdfFile : null
+  };
+}
+
+/**
+ * 目次スプシにシフト表と別表のリンクを追記する関数
+ */
+function updateIndexLinks(year, month, clinicName, shiftUrl, qualUrl) {
+  try {
+    var qualSs = SpreadsheetApp.openById(QUAL_SPREADSHEET_ID);
+    var indexSheet = qualSs.getSheetByName('✨ 目次');
+    if (!indexSheet) return;
+
+    var data = indexSheet.getDataRange().getValues();
+    var header = data[0];
+    
+    // ヘッダーから列番号を探す
+    var colClinic = -1, colShift = -1, colQual = -1;
+    for (var c = 0; c < header.length; c++) {
+      var h = String(header[c]).trim();
+      if (h === '拠点名') colClinic = c;
+      if (h.indexOf('シフト') !== -1) colShift = c;
+      if (h.indexOf('別表') !== -1) colQual = c;
+    }
+    
+    // 拠点名列が見つからなければ処理しない
+    if (colClinic === -1) return;
+
+    // 該当する拠点の行を探してリンクを書き込む
+    var updated = false;
+    for (var r = 1; r < data.length; r++) {
+      if (String(data[r][colClinic]).trim() === clinicName) {
+        var rowNum = r + 1;
+        if (colShift !== -1 && shiftUrl) {
+          indexSheet.getRange(rowNum, colShift + 1).setFormula('=HYPERLINK("' + shiftUrl + '", "シフト表")');
+        }
+        if (colQual !== -1 && qualUrl) {
+          indexSheet.getRange(rowNum, colQual + 1).setFormula('=HYPERLINK("' + qualUrl + '", "別表")');
+        }
+        updated = true;
+        break;
+      }
+    }
+    
+    // 新規拠点などで行が見つからなかった場合は最終行に追記
+    if (!updated) {
+      var newRow = [];
+      for (var c = 0; c < header.length; c++) newRow.push('');
+      newRow[colClinic] = clinicName;
+      indexSheet.appendRow(newRow);
+      var rowNum = indexSheet.getLastRow();
+      
+      if (colShift !== -1 && shiftUrl) indexSheet.getRange(rowNum, colShift + 1).setFormula('=HYPERLINK("' + shiftUrl + '", "シフト表")');
+      if (colQual !== -1 && qualUrl) indexSheet.getRange(rowNum, colQual + 1).setFormula('=HYPERLINK("' + qualUrl + '", "別表")');
+    }
+    
+  } catch(e) {
+    Logger.log('目次の更新エラー: ' + e.message);
+  }
 }
 
 /**
@@ -236,9 +314,9 @@ function generateScheduleWithContext(context, clinicNo, year, month) {
  */
 function generateSchedule(clinicNo, year, month) {
   var context = buildContext(year, month);
-  var sheet = generateScheduleWithContext(context, clinicNo, year, month);
+  var result = generateScheduleWithContext(context, clinicNo, year, month, null);
   SpreadsheetApp.flush();
-  return sheet;
+  return result.sheet;
 }
 
 /**
@@ -247,9 +325,22 @@ function generateSchedule(clinicNo, year, month) {
 function generateAllClinics(year, month) {
   var t0 = new Date().getTime();
   var context = buildContext(year, month);
+  
+  // 保存先フォルダの準備 (PDF処理と同じロジック)
+  var PDF_BASE_FOLDER_ID = '1O5ScGBUVKOvmhjpSrIH_9KbrtkYu_0DB';
+  var baseFolder = DriveApp.getFolderById(PDF_BASE_FOLDER_ID);
+  var folderName = year + '年' + ('0' + month).slice(-2) + '月';
+  var targetFolder;
+  var folders = baseFolder.getFoldersByName(folderName);
+  if (folders.hasNext()) {
+    targetFolder = folders.next();
+  } else {
+    targetFolder = baseFolder.createFolder(folderName);
+  }
+
   var n = 0;
   context.clinicMaster.list.forEach(function(clinic) {
-    generateScheduleWithContext(context, clinic.clinicNo, year, month);
+    generateScheduleWithContext(context, clinic.clinicNo, year, month, targetFolder);
     n++;
   });
   SpreadsheetApp.flush();

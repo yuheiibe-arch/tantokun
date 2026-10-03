@@ -14,15 +14,18 @@ function collectScheduleFromContext(context, clinicNo, startKey, endKey) {
     var inAM = overlaps(r.start, r.end, SLOT_AM_START, SLOT_AM_END);
     var inPM = overlaps(r.start, r.end, SLOT_PM_START, SLOT_PM_END);
     
-    // ★ 変更：ハッシュ計算（変更検知）に「勤務先」も反映させるため、work を追加
-    var workName = context.doctorMaster[r.ikiNo] || '';
+    // ★ 変更：ハッシュ計算等に反映させるため、マスターのデータをオブジェクトとして取得
+    var docData = context.doctorMaster[r.ikiNo] || { work: '', zekka: 'NG', online: 'NG' };
+    
     var doctor = { 
       ikiNo: r.ikiNo, 
       name: r.name, 
       start: r.start, 
       end: r.end, 
       dept: r.dept,
-      work: workName 
+      work: docData.work,        // 既存の勤務先
+      zekka: docData.zekka,      // ★追加：舌下
+      online: docData.online     // ★追加：オンライン
     };
     
     if (!schedule[r.dateKey]) schedule[r.dateKey] = { am: [], pm: [] };

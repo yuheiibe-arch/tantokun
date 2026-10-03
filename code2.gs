@@ -64,9 +64,7 @@ function getClinicMaster() {
 
 
 /**
- * 医師マスタを読み込み、医籍番号→主な勤務先名 の対応表を返す。
- * 返り値の例: getDoctorMaster()[532756] = 'エムスリー株式会社'
- * ※ 医籍番号や勤務先名が空の行はスキップ。
+ * 医師マスタを読み込み、医籍番号→勤務先・資格情報の対応表を返す。
  */
 function getDoctorMaster() {
   var opened = openSource('医師マスタ');
@@ -75,14 +73,28 @@ function getDoctorMaster() {
 
   var idxId   = requireColumn(h, '医籍登録番号', '医師マスタ');
   var idxWork = requireColumn(h, '現在の主な勤務先名', '医師マスタ');
+  
+  // ★ 追加：資格情報の列（見つからなければnullになる安全設計）
+  var idxZekka  = optionalColumn(h, '舌下免疫療法E-ラーニング受講');
+  var idxOnline = optionalColumn(h, 'オンライン診療研修受講');
 
   var map = {};
   for (var i = 1; i < values.length; i++) {
     var id = values[i][idxId];
     if (id === '' || id === null) continue;
+    
     var work = String(values[i][idxWork]).trim();
-    // 勤務先名が空なら登録しない（→ 後段で「所属先は空欄」になる）
-    map[normalizeId(id)] = work;
+    
+    // 「済」ならOK、それ以外（未・空欄）はNG
+    var zekkaStatus = (idxZekka !== null && String(values[i][idxZekka]).trim() === '済') ? 'OK' : 'NG';
+    var onlineStatus = (idxOnline !== null && String(values[i][idxOnline]).trim() === '済') ? 'OK' : 'NG';
+
+    // これまでは work の文字列だけだったものを、オブジェクト（複数データ）に変更
+    map[normalizeId(id)] = {
+      work: work,
+      zekka: zekkaStatus,
+      online: onlineStatus
+    };
   }
   return map;
 }
@@ -130,8 +142,12 @@ function test_step2a_masters() {
   // 確定シフトに出てきた医籍番号でいくつか試し引き
   var sampleIds = ['532756', '458267', '441829'];
   sampleIds.forEach(function(id){
-    var work = doc[normalizeId(id)];
-    Logger.log('  医籍番号 ' + id + ' → ' + (work ? work : '（勤務先名なし＝所属先は空欄になる）'));
+    var docInfo = doc[normalizeId(id)];
+    if(docInfo){
+       Logger.log('  医籍番号 ' + id + ' → 勤務先: ' + docInfo.work + ' / 舌下: ' + docInfo.zekka + ' / オンライン: ' + docInfo.online);
+    } else {
+       Logger.log('  医籍番号 ' + id + ' → （データなし）');
+    }
   });
 
   Logger.log('\n===== 第2段階-A マスター読み込みテスト 完了 =====');
