@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: 'Noto Sans JP', sans-serif; padding: 15px; color: #333; background-color: #f9f9f9; }
+    h2 { font-size: 18px; border-bottom: 2px solid #4a86e8; padding-bottom: 5px; margin-top: 0; }
+    .form-group { margin-bottom: 15px; }
+    label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+    input[type="text"], select, textarea {
+      width: 100%; padding: 8px; box-sizing: border-box; 
+      border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+    }
+    textarea { resize: vertical; height: 60px; }
+    .btn-container { text-align: center; margin-top: 25px; }
+    .btn {
+      background-color: #4a86e8; color: white; border: none; 
+      padding: 10px 25px; font-size: 16px; border-radius: 4px; 
+      cursor: pointer; font-weight: bold;
+    }
+    .btn:hover { background-color: #3a6ecc; }
+    .btn:disabled { background-color: #ccc; cursor: not-allowed; }
+    #message { margin-top: 15px; text-align: center; font-weight: bold; font-size: 14px; }
+    .success { color: #2e7d32; }
+    .error { color: #c62828; }
+  </style>
+</head>
+<body>
+  <h2>受講依頼フォーム</h2>
+  <div id="form-area">
+    <div class="form-group">
+      <label for="clinicName">依頼元拠点名 <span style="color:red;">*</span></label>
+      <input type="text" id="clinicName" placeholder="例: 稲毛海岸" required>
+    </div>
+    <div class="form-group">
+      <label for="doctorName">対象の医師名 <span style="color:red;">*</span></label>
+      <input type="text" id="doctorName" placeholder="例: 山田太郎" required>
+    </div>
+    <div class="form-group">
+      <label for="trainingType">依頼内容（受講させたいもの） <span style="color:red;">*</span></label>
+      <select id="trainingType" required>
+        <option value="">-- 選択してください --</option>
+        <option value="舌下免疫療法 E-ラーニング">舌下免疫療法 E-ラーニング</option>
+        <option value="オンライン診療研修">オンライン診療研修</option>
+        <option value="舌下 ＋ オンライン 両方">舌下 ＋ オンライン 両方</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="notes">備考（任意）</label>
+      <textarea id="notes" placeholder="その他、DS部へ伝達事項があればご記入ください"></textarea>
+    </div>
+    <div class="btn-container">
+      <button class="btn" id="submitBtn" onclick="submitForm()">送信する</button>
+    </div>
+  </div>
+  <div id="message"></div>
+
+  <script>
+    function submitForm() {
+      var clinicName = document.getElementById('clinicName').value.trim();
+      var doctorName = document.getElementById('doctorName').value.trim();
+      var trainingType = document.getElementById('trainingType').value;
+      var notes = document.getElementById('notes').value.trim();
+      var msgDiv = document.getElementById('message');
+      var btn = document.getElementById('submitBtn');
+
+      if (!clinicName || !doctorName || !trainingType) {
+        msgDiv.className = 'error';
+        msgDiv.innerText = '必須項目（*）をすべて入力してください。';
+        return;
+      }
+
+      // 送信中UIに変更
+      btn.disabled = true;
+      btn.innerText = '送信中...';
+      msgDiv.innerText = '';
+
+      var formData = {
+        clinicName: clinicName,
+        doctorName: doctorName,
+        trainingType: trainingType,
+        notes: notes
+      };
+
+      // GAS側の関数を呼び出し
+      google.script.run
+        .withSuccessHandler(function(response) {
+          if (response.success) {
+            document.getElementById('form-area').style.display = 'none';
+            msgDiv.className = 'success';
+            msgDiv.innerHTML = '依頼を送信しました。<br>このウィンドウは自動的に閉じます。<br><br>' + (response.message ? '<span style="font-size:12px; color:#666;">'+response.message+'</span>' : '');
+            setTimeout(function() { google.script.host.close(); }, 2500);
+          } else {
+            btn.disabled = false;
+            btn.innerText = '送信する';
+            msgDiv.className = 'error';
+            msgDiv.innerText = 'エラー: ' + response.message;
+          }
+        })
+        .withFailureHandler(function(error) {
+          btn.disabled = false;
+          btn.innerText = '送信する';
+          msgDiv.className = 'error';
+          msgDiv.innerText = '通信エラーが発生しました: ' + error.message;
+        })
+        .submitTrainingRequest(formData);
+    }
+  </script>
+</body>
+</html>

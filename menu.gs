@@ -11,12 +11,13 @@ function onOpen() {
     .addSeparator()
     .addItem('🛑 バックグラウンド処理を強制停止', 'stopBackgroundProcess')
     .addSeparator()
-    .addItem('📝 所属先変更依頼', 'showFormDialog') // ★ここを追加
+    .addItem('📝 所属先変更依頼', 'showFormDialog')
+    .addItem('🎓 舌下・オンライン 受講依頼', 'openTrainingRequestDialog') // ★ 今回追加した受講依頼フォーム呼び出し
     .addToUi();
 }
 
 /**
- * ★追加：フォームを開くためのダイアログを表示する関数
+ * フォームを開くためのダイアログを表示する関数（所属先変更依頼用）
  */
 function showFormDialog() {
   var formUrl = 'https://docs.google.com/forms/d/e/1FAIpQLSe9yFWpRopjnyx46W4CwFGXe99K_KSH1CN0kPr4KtpvGtKILg/viewform?usp=dialog';
@@ -130,6 +131,18 @@ function processBatch() {
     ss.toast('マスターデータの読み込みに失敗しました: ' + e.message, 'エラー', 10);
     return;
   }
+
+  // ★ PDF保存用フォルダの準備
+  var PDF_BASE_FOLDER_ID = '1O5ScGBUVKOvmhjpSrIH_9KbrtkYu_0DB';
+  var baseFolder = DriveApp.getFolderById(PDF_BASE_FOLDER_ID);
+  var folderName = year + '年' + ('0' + month).slice(-2) + '月';
+  var targetFolder;
+  var folders = baseFolder.getFoldersByName(folderName);
+  if (folders.hasNext()) {
+    targetFolder = folders.next();
+  } else {
+    targetFolder = baseFolder.createFolder(folderName);
+  }
   
   while (queue.length > 0) {
     if (Date.now() - startTime > 270000) {
@@ -150,7 +163,6 @@ function processBatch() {
       
       props.setProperty('CURRENT_CLINIC_NAME', clinic.name);
 
-      // --- ★ UI実行時も変更チェック（ハッシュ比較）を行う ---
       var lastDay = new Date(year, month, 0).getDate();
       var startKey = dateKey(new Date(year, month - 1, 1));
       var endKey   = dateKey(new Date(year, month - 1, lastDay));
@@ -163,7 +175,6 @@ function processBatch() {
       var expectedSheetName = ('0' + month).slice(-2) + clinic.name;
       var targetSheet = ss.getSheetByName(expectedSheetName);
 
-      // 変更がなく、かつシートがすでに存在する場合はスキップ
       if (currentHash === lastHash && targetSheet) {
         ss.toast(currentIndex + '/' + totalCount + ' 件目: 変更なし・スキップ\n残り ' + queue.length + ' 件', '⏭️ スキップ: ' + clinic.name, 3);
         
@@ -174,20 +185,19 @@ function processBatch() {
         });
         
       } else {
-        // --- 変更があった場合、またはシートが存在しない場合のみ生成 ---
         ss.toast(currentIndex + '/' + totalCount + ' 件目を生成中...\n残り ' + queue.length + ' 件', '⚙️ 実行中: ' + clinic.name, 10);
 
-        var sheet = generateScheduleWithContext(context, clinicNo, year, month);
-        sheet.showSheet(); // 原本が非表示の場合でも強制的に表示させてリンクを使えるようにする
-        
-        var pdfFile = exportSheetToPDF(sheet, year, month, clinic.name);
+        // ★ targetFolder を渡して、シフト表と別表を両方生成・保存させる
+        var resultObj = generateScheduleWithContext(context, clinicNo, year, month, targetFolder);
+        var sheet = resultObj.sheet;
+        sheet.showSheet(); 
         
         var nowStr = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy/MM/dd HH:mm:ss');
-        props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr); // 更新日時の保存
-        props.setProperty(propKey, currentHash); // 次回比較用のハッシュを保存
+        props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr); 
+        props.setProperty(propKey, currentHash); 
         
-        var folders = pdfFile.getParents();
-        var folderUrl = folders.hasNext() ? folders.next().getUrl() : '';
+        // フォルダのURL取得
+        var folderUrl = targetFolder.getUrl();
         props.setProperty('LAST_FOLDER_URL', folderUrl);
 
         results.push({
@@ -206,7 +216,6 @@ function processBatch() {
   }
   
   ss.toast('最終処理（目次の作成）を行っています...', '✨ 仕上げ中', 5);
-  // 手動実行時も、全自動スキャン型の4列目次ジェネレーターを呼び出す
   var urls = updateIndexSheet(null, ss);
   
   props.setProperty('IS_COMPLETED', 'true');
@@ -251,7 +260,7 @@ function stopBackgroundProcess() {
 }
 
 /**
- * ★目次生成ロジックの統一化（自動監視側と完全に同じ4列スキャン方式）
+ * 目次生成ロジックの統一化（自動監視側と完全に同じ4列スキャン方式）
  */
 function updateIndexSheet(unused_results, ss) {
   if (!ss) ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -332,9 +341,6 @@ function updateIndexSheet(unused_results, ss) {
   };
 }
 
-/**
- * 手動UIからハッシュ計算を行うための共通関数
- */
 function computeMD5_(input) {
   var rawHash = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, input, Utilities.Charset.UTF_8);
   var hashStr = '';

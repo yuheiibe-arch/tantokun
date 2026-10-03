@@ -148,22 +148,36 @@ function daemon_processQueue() {
           saveScheduleState_(clinicNo, TARGET_YEAR, TARGET_MONTH, currentSchedule);
         } else {
           Logger.log('🔥 【処理開始】' + clinic.name + ' (' + TARGET_MONTH + '月分) - 送信予約あり');
+          
+          // PDFの保存先フォルダを準備
+          var PDF_BASE_FOLDER_ID = '1O5ScGBUVKOvmhjpSrIH_9KbrtkYu_0DB';
+          var baseFolder = DriveApp.getFolderById(PDF_BASE_FOLDER_ID);
+          var folderName = TARGET_YEAR + '年' + ('0' + TARGET_MONTH).slice(-2) + '月';
+          var targetFolder;
+          var folders = baseFolder.getFoldersByName(folderName);
+          if (folders.hasNext()) {
+            targetFolder = folders.next();
+          } else {
+            targetFolder = baseFolder.createFolder(folderName);
+          }
+
           var maxRetries = 2;
           for (var attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-              var sheet = generateScheduleWithContext(context, clinicNo, TARGET_YEAR, TARGET_MONTH);
+              // ★ 変更点：シフト表に加えて別表も生成し、戻り値のオブジェクトを受け取る
+              var resultObj = generateScheduleWithContext(context, clinicNo, TARGET_YEAR, TARGET_MONTH, targetFolder);
+              var sheet = resultObj.sheet;
               SpreadsheetApp.flush();
               Utilities.sleep(2000); 
               
               sheet.getRange('A1').clearNote();
               SpreadsheetApp.flush();
               
-              var pdfFile = exportSheetToPDF(sheet, TARGET_YEAR, TARGET_MONTH, clinic.name);
-              if (!pdfFile) throw new Error('PDF生成失敗');
-              
               var sheetUrl = ss.getUrl() + '#gid=' + sheet.getSheetId();
               var type = isFirstTime ? 'monthly' : 'filled';
-              enqueueChatworkNotification_(clinic, TARGET_MONTH, type, diffs, pdfFile, sheetUrl);
+
+              // ★ 変更点：シフトPDFと別表のPDFの2つをキュー関数に渡す
+              enqueueChatworkNotification_(clinic, TARGET_MONTH, type, diffs, resultObj.shiftPdf, sheetUrl, resultObj.qualPdf);
               
               props.setProperty('LAST_UPDATE_' + sheet.getName(), nowStr);
               props.setProperty(propKey, currentHash);
