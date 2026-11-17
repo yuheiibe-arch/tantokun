@@ -1,6 +1,7 @@
 /**
  * ========================================
  * 第5段階：ビュー（シートへの書き込み・レイアウト処理）
+ * ★修正: [object Object] エラー解消（医師マスタのオブジェクトから .work を取り出す対応）
  * ========================================
  */
 
@@ -167,8 +168,12 @@ function writeSlot(sheet, topRow, bottomRow, col, doctors, doctorMaster, useLabe
 
     var works = displayDoctors.map(function(doc) {
       if (doc.ikiNo === 'DUMMY') return ' ';
-      // ★ フィルター関数を通す
-      return getValidWorkName(doctorMaster[doc.ikiNo]);
+      
+      // ★修正箇所: doctorMaster[doc.ikiNo] がオブジェクト化されたことに対応
+      var docInfo = doctorMaster[doc.ikiNo];
+      var workStr = docInfo ? (typeof docInfo === 'object' ? docInfo.work : docInfo) : '';
+      return getValidWorkName(workStr);
+      
     }).join(' / ');
     bottomCell.setValue(works).setFontSize(FONT_SIZE_WORK);
     
@@ -212,8 +217,10 @@ function writeSlot(sheet, topRow, bottomRow, col, doctors, doctorMaster, useLabe
 
       workText = lines.map(function(doc) {
         if (doc.ikiNo === 'DUMMY') return ' ';
-        // ★ フィルター関数を通す
-        return getValidWorkName(doctorMaster[doc.ikiNo]);
+        // ★修正箇所
+        var docInfo = doctorMaster[doc.ikiNo];
+        var workStr = docInfo ? (typeof docInfo === 'object' ? docInfo.work : docInfo) : '';
+        return getValidWorkName(workStr);
       }).join(' / ');
       
     } else {
@@ -240,8 +247,10 @@ function writeSlot(sheet, topRow, bottomRow, col, doctors, doctorMaster, useLabe
             fullText += label;
             segments.push({ start: labelStart, end: fullText.length, size: FONT_SIZE_LABEL });
           }
-          // ★ フィルター関数を通す
-          currentWorkLine.push(doc.ikiNo === 'DUMMY' ? ' ' : getValidWorkName(doctorMaster[doc.ikiNo]));
+          // ★修正箇所
+          var docInfo = doctorMaster[doc.ikiNo];
+          var workStr = docInfo ? (typeof docInfo === 'object' ? docInfo.work : docInfo) : '';
+          currentWorkLine.push(doc.ikiNo === 'DUMMY' ? ' ' : getValidWorkName(workStr));
         });
         workLines.push(currentWorkLine.join(' / '));
       });
